@@ -21,6 +21,7 @@
 
 #include <QApplication>
 #include <QDesktopServices>
+#include <QTcpServer>
 #include <QUrl>
 
 #ifdef Q_OS_WIN
@@ -168,6 +169,7 @@ private slots:
   void test_aLaterCheckSupersedesThePreviousOffer();
   void test_aDroppedManualRequestCannotRelabelARunningCheck();
   void test_evictingTheTrackedMessageClearsTheTrackedId();
+  void test_forkOpensItsOwnReleasesWithoutCheckingUpstream();
 #ifdef Q_OS_WIN
   void test_launchFailureKeepsReleaseFallbackAndAllowsRetry();
   void test_duplicateActivationStartsOnlyOneHelper();
@@ -217,6 +219,32 @@ bool TestUpdateController::activeWithKey(const QString &p_key, NotificationMessa
     }
   }
   return false;
+}
+
+void TestUpdateController::test_forkOpensItsOwnReleasesWithoutCheckingUpstream() {
+  delete m_controller;
+  const QUrl releases(QStringLiteral("https://github.com/clyecao/vnote/releases"));
+  QTcpServer api;
+  QVERIFY(api.listen(QHostAddress::LocalHost));
+  m_updateService->testSetEndpointOverride(
+      QUrl(QStringLiteral("http://127.0.0.1:%1/releases/latest").arg(api.serverPort())));
+  m_updateService->testSetExtraAllowedHost(QStringLiteral("127.0.0.1"));
+  QSignalSpy requests(&api, &QTcpServer::newConnection);
+  m_controller = new UpdateController(*m_services, nullptr, nullptr, releases);
+  QSignalSpy checked(m_updateService, &UpdateService::checkFinished);
+  QSignalSpy failed(m_updateService, &UpdateService::failed);
+
+  m_controller->runStartupTasks();
+  QVERIFY(m_urlSink->m_opened.isEmpty());
+  m_controller->checkForUpdatesManually();
+  QCOMPARE(m_urlSink->m_opened, QList<QUrl>{releases});
+  QVERIFY(!requests.wait(100));
+  QCOMPARE(checked.count(), 0);
+  QCOMPARE(failed.count(), 0);
+
+  // Even an unrelated upstream service result must not offer an upstream update.
+  emit m_updateService->checkFinished(makeInfo(true));
+  QVERIFY(m_notifications->messages().isEmpty());
 }
 
 void TestUpdateController::init() {

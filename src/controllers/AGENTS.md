@@ -2,6 +2,15 @@
 
 Controllers are QObject-based business logic mediators that sit between models, views, and services. They translate user actions into service calls and service results into UI feedback, orchestrating operations without containing any UI logic themselves.
 
+## Fork update policy
+
+`UpdateController` accepts an optional manual release URL. When nonempty, startup does
+not check upstream, manual checks open only that URL, upstream service results are not
+connected, and script installation is disabled. `MainWindow2` injects this fork's release
+page when `VNOTE_FORK_BUILD` is enabled. The default empty URL retains the upstream
+signed-update behavior. Coverage: `test_updatecontroller` includes URL interception and a
+local API listener proving that a manual fork check issues no upstream request.
+
 ## MVC Rules for Controllers
 
 See [MVC Rules](../../AGENTS.md#mvc-rules-must-follow) — Key rule for controllers: **Controllers MUST NOT inherit from QWidget** (testable without GUI).

@@ -367,6 +367,23 @@ UCRT/API-set DLLs recursively; the Typst gate requires a nonempty `Qt6Pdf.dll`.
 Keep `qtpdf` in the CI SDK for the required runtime and its attribution.
 ---
 
+## Fork Windows releases
+
+This fork restarts the version sequence at 0.1.0 (upstream baseline 4.11.0).
+`VNOTE_FORK_BUILD` defaults to ON: the app's update menu opens
+https://github.com/clyecao/vnote/releases, without querying or installing upstream updates.
+The upstream signed updater and its trust roots remain unchanged. Do not publish unsigned
+update manifests or reuse the upstream MSI upgrade code for fork packages.
+
+Dispatch `ci-win.yml` with `fork_release=true` for a manual fork release. This installs
+WiX 4.0.4 plus its matching UI extension, runs the six complete sync/update test suites,
+retains all ZIP/runtime gates, checks MSI identity and install/uninstall on the runner,
+and uploads `fork-windows-release` (MSI, ZIP, SHA256SUMS.txt). It does not publish the
+continuous release or generate an update manifest. After the run succeeds, publish those
+exact assets under `fork-v<version>`, targeting the run's commit. MSI display name,
+install directory, Start menu folder and UpgradeCode belong to this fork; ProductCode is
+new for each installer build. The application retains VNote's existing user data format.
+
 ## Update artifacts
 
 Ordinary startup/manual checks remain metadata-only and read-only for the installation;

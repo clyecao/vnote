@@ -1,4 +1,7 @@
 # VNote
+
+> **clyecao 分支版：** 基于上游 **4.11.0**，独立版本号从 **0.1.0** 开始。Windows MSI 安装包和 ZIP 包请从[本仓库 Releases](https://github.com/clyecao/vnote/releases)下载，包含 GitHub Enterprise 同步配置支持。“检查更新”打开本分支发布页，下载后手动更新。
+
 ![CI-Windows](https://github.com/vnotex/vnote/actions/workflows/ci-win.yml/badge.svg?branch=master) ![CI-Linux](https://github.com/vnotex/vnote/actions/workflows/ci-linux.yml/badge.svg?branch=master) ![CI-MacOS](https://github.com/vnotex/vnote/actions/workflows/ci-macos.yml/badge.svg?branch=master)
 
 [English](README.md)

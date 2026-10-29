@@ -3,12 +3,16 @@ cmake_minimum_required (VERSION 3.21)
 set(CMAKE_OSX_DEPLOYMENT_TARGET "12.1" CACHE STRING "Minimum OS X deployment version")
 
 project(VNote
-    VERSION 4.11.0
+    VERSION 0.1.0
     DESCRIPTION "A pleasant note-taking platform"
     HOMEPAGE_URL "https://app.vnote.fun"
     LANGUAGES C CXX)
 
 set(CMAKE_BUILD_TYPE Release CACHE STRING "Build type, defaults to Release")
+
+# This fork has its own version sequence and uses manual release downloads.
+# Upstream's signed updater and trust roots are deliberately left intact.
+option(VNOTE_FORK_BUILD "Use the clyecao fork's release and installer identity" ON)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)

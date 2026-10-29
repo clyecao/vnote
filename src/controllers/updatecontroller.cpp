@@ -78,8 +78,12 @@ struct UpdateController::ScriptUpdateSession : QObject {
 #endif
 
 UpdateController::UpdateController(ServiceLocator &p_services, QWidget *p_parentWidget,
-                                   QObject *p_parent)
-    : QObject(p_parent), m_services(p_services), m_parentWidget(p_parentWidget) {
+                                   QObject *p_parent, const QUrl &p_manualReleasesUrl)
+    : QObject(p_parent), m_services(p_services), m_manualReleasesUrl(p_manualReleasesUrl),
+      m_parentWidget(p_parentWidget) {
+  if (!m_manualReleasesUrl.isEmpty()) {
+    return;
+  }
   auto *service = m_services.get<UpdateService>();
   if (!service) {
     return;
@@ -120,6 +124,9 @@ void UpdateController::applyConfiguredSource() {
 // ===========================================================================
 
 void UpdateController::runStartupTasks() {
+  if (!m_manualReleasesUrl.isEmpty()) {
+    return;
+  }
   auto *service = m_services.get<UpdateService>();
   if (!service) {
     return;
@@ -147,7 +154,7 @@ void UpdateController::runStartupTasks() {
 // ===========================================================================
 
 void UpdateController::checkForUpdatesManually() {
-  if (!m_services.get<UpdateService>()) {
+  if (!m_manualReleasesUrl.isEmpty() || !m_services.get<UpdateService>()) {
     openReleasesPage();
     return;
   }
@@ -161,6 +168,9 @@ void UpdateController::checkForUpdatesManually() {
 }
 
 bool UpdateController::startCheck(bool p_manual) {
+  if (!m_manualReleasesUrl.isEmpty()) {
+    return false;
+  }
   auto *service = m_services.get<UpdateService>();
   if (!service) {
     return false;
@@ -317,7 +327,7 @@ NotificationAction UpdateController::makeScriptUpdateAction(const UpdateInfo &p_
 }
 
 void UpdateController::startScriptUpdate(const UpdateInfo &p_info) {
-  if (m_scriptUpdateSession) {
+  if (!m_manualReleasesUrl.isEmpty() || m_scriptUpdateSession) {
     return;
   }
   if (auto *notifications = m_services.get<NotificationService>()) {
@@ -753,6 +763,10 @@ void UpdateController::skipVersion(const QString &p_version) {
 }
 
 void UpdateController::openReleasesPage() const {
+  if (!m_manualReleasesUrl.isEmpty()) {
+    QDesktopServices::openUrl(m_manualReleasesUrl);
+    return;
+  }
   if (auto *service = m_services.get<UpdateService>()) {
     QDesktopServices::openUrl(service->releasesPageUrl());
     return;

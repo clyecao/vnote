@@ -4,6 +4,7 @@
 #include <QObject>
 #include <QPointer>
 #include <QString>
+#include <QUrl>
 
 #ifdef Q_OS_WIN
 #include <QStringList>
@@ -38,7 +39,7 @@ class UpdateController : public QObject {
 
 public:
   UpdateController(ServiceLocator &p_services, QWidget *p_parentWidget,
-                   QObject *p_parent = nullptr);
+                   QObject *p_parent = nullptr, const QUrl &p_manualReleasesUrl = QUrl());
   ~UpdateController() override;
 
   // Runs once after MainWindowAfterStart: applies the configured source and
@@ -109,6 +110,9 @@ private:
   void invalidateTrackedNotification();
 
   ServiceLocator &m_services;
+
+  // A fork without its own signed update channel only opens this release page.
+  const QUrl m_manualReleasesUrl;
 
   // Dialog / message-box parent only. The controller has no other reason to
   // know about the widget layer.

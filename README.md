@@ -1,4 +1,7 @@
 # VNote
+
+> **clyecao fork:** independent versions start at **0.1.0**, based on upstream **4.11.0**. Download Windows MSI/ZIP packages from [this fork’s Releases](https://github.com/clyecao/vnote/releases). Includes GitHub Enterprise sync configuration support. “Check for Updates” opens this fork’s release page; updates are installed manually.
+
 ![CI-Windows](https://github.com/vnotex/vnote/actions/workflows/ci-win.yml/badge.svg?branch=master) ![CI-Linux](https://github.com/vnotex/vnote/actions/workflows/ci-linux.yml/badge.svg?branch=master) ![CI-MacOS](https://github.com/vnotex/vnote/actions/workflows/ci-macos.yml/badge.svg?branch=master)
 
 [简体中文](README_zh_CN.md)

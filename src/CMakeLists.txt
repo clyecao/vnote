@@ -67,6 +67,10 @@ add_executable(vnote WIN32 MACOSX_BUNDLE
 
 add_dependencies(vnote VX_EXTRA_RESOURCE)
 
+if(VNOTE_FORK_BUILD)
+    target_compile_definitions(vnote PRIVATE VNOTE_FORK_BUILD)
+endif()
+
 # Always refresh runtime dependencies, including builds that do not relink vnote.
 add_custom_target(vnote_typst_runtime)
 add_dependencies(vnote_typst_runtime VTextEditTypst VTextEdit)

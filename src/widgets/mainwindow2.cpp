@@ -399,7 +399,11 @@ void MainWindow2::setupUI() {
   // Release checker. Constructed BEFORE kickOffPostInit() so its
   // MainWindowAfterStart subscription is registered before the hook fires.
   // It owns all update policy; MainWindow2 only forwards the menu action.
-  m_updateController = new UpdateController(m_serviceLocator, this, this);
+  QUrl manualReleasesUrl;
+#ifdef VNOTE_FORK_BUILD
+  manualReleasesUrl = QUrl(QStringLiteral("https://github.com/clyecao/vnote/releases"));
+#endif
+  m_updateController = new UpdateController(m_serviceLocator, this, this, manualReleasesUrl);
 #if defined(Q_OS_WIN)
   connect(m_updateController, &UpdateController::scriptUpdateShutdownRequested, this, [this]() {
     const int previousRequest = m_requestQuit;

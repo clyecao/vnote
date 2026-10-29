@@ -9,6 +9,11 @@ on:
   # Allows you to run this workflow manually from the Actions tab.
   workflow_dispatch:
     inputs:
+      fork_release:
+        type: boolean
+        description: 'Build and verify fork MSI/ZIP assets for manual publication'
+        required: false
+        default: false
       debug_enabled:
         type: boolean
         description: 'Pause for key-restricted SSH debugging'
@@ -21,7 +26,7 @@ on:
         default: ''
 
 env:
-    VNOTE_VER: 4.11.0
+    VNOTE_VER: 0.1.0
     CARGO_BUILD_JOBS: 2
 
 jobs:
@@ -78,6 +83,16 @@ jobs:
           arch: ${{matrix.config.arch}}
           modules: ${{matrix.config.qt_modules}}
           cache: 'true'
+
+      - name: Install WiX for fork installer
+        if: ${{ inputs.fork_release }}
+        shell: pwsh
+        run: |
+          dotnet tool install --global wix --version 4.0.4
+          if ($LASTEXITCODE -ne 0) { throw 'WiX installation failed' }
+          wix extension add --global WixToolset.UI.wixext/4.0.4
+          if ($LASTEXITCODE -ne 0) { throw 'WiX UI installation failed' }
+          wix --version
 
       - name: Create Build Dir
         shell: bash
@@ -144,6 +159,7 @@ jobs:
         env:
           VS_CMD: ${{ matrix.config.vs_cmd }}
           # Release runs package only; non-release runs build and run tests.
+          FORK_RELEASE: ${{ inputs.fork_release }}
           VNOTE_TESTS: ${{ !startsWith(github.event.head_commit.message, '[Release]') && 'ON' || 'OFF' }}
         run: |
           cmake --version
@@ -158,7 +174,11 @@ jobs:
           REM vtextedit tests belong to ALL even with VNOTE_BUILD_TESTS=OFF.
           REM pack builds all release dependencies without compiling tests.
           if "%VNOTE_TESTS%"=="ON" (
-            cmake --build . --target all test_typsteditor || exit /b 1
+            if "%FORK_RELEASE%"=="true" (
+              cmake --build . --target test_syncservice test_sync_classifier test_notebooksyncinfocontroller test_notebooksyncinfodialog2 test_open_notebook_dialog2 test_updatecontroller || exit /b 1
+            ) else (
+              cmake --build . --target all test_typsteditor || exit /b 1
+            )
           )
           cmake --build . --target=pack || exit /b 1
           7z x VNote*.zip || exit /b 1
@@ -190,8 +210,12 @@ jobs:
         run: |
           call "%VS_CMD%"
           set TEST_RESULT=0
-          ctest -C Release --output-on-failure || set TEST_RESULT=1
-          ctest --test-dir libs/vtextedit -C Release -R "^test_typsteditor$" --output-on-failure --no-tests=error || set TEST_RESULT=1
+          if "${{ inputs.fork_release }}"=="true" (
+            ctest -C Release -R "^(test_syncservice|test_sync_classifier|test_notebooksyncinfocontroller|test_notebooksyncinfodialog2|test_open_notebook_dialog2|test_updatecontroller)$" --output-on-failure --no-tests=error || set TEST_RESULT=1
+          ) else (
+            ctest -C Release --output-on-failure || set TEST_RESULT=1
+            ctest --test-dir libs/vtextedit -C Release -R "^test_typsteditor$" --output-on-failure --no-tests=error || set TEST_RESULT=1
+          )
           exit /b %TEST_RESULT%
         working-directory: ${{runner.workspace}}/build
 
@@ -540,6 +564,65 @@ jobs:
           Get-Content "$work/stdout.log", "$work/stderr.log"
           if ($process.ExitCode -ne 0) { throw "Packaged VNote cannot launch (exit $($process.ExitCode))" }
 
+      - name: Verify and stage fork installer
+        if: ${{ inputs.fork_release }}
+        shell: pwsh
+        working-directory: ${{runner.workspace}}/build
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $base = "VNote-$env:VNOTE_VER-win64"
+          $msi = (Get-Item "$base.msi").FullName
+          $installer = New-Object -ComObject WindowsInstaller.Installer
+          $database = $installer.OpenDatabase($msi, 0)
+          $expected = @{
+            ProductName = 'VNote Fork'
+            ProductVersion = $env:VNOTE_VER
+            UpgradeCode = '{214A593B-D5EE-498F-A130-C5DFD7ADD71A}'
+          }
+          foreach ($property in $expected.Keys) {
+            $view = $database.OpenView("SELECT ``Value`` FROM ``Property`` WHERE ``Property``='$property'")
+            $view.Execute()
+            $record = $view.Fetch()
+            if (-not $record -or $record.StringData(1) -ne $expected[$property]) {
+              throw "MSI has incorrect $property"
+            }
+            $view.Close()
+          }
+          # Exercise the actual installer on the disposable runner, then remove it.
+          $installDir = Join-Path $env:RUNNER_TEMP 'VNoteFork-install-test'
+          $log = Join-Path $env:RUNNER_TEMP 'vnote-fork-msi-install.log'
+          $process = Start-Process msiexec.exe -ArgumentList @('/i', "`"$msi`"", '/qn', '/norestart', "INSTALL_ROOT=`"$installDir`"", '/l*v', "`"$log`"") -Wait -PassThru
+          if ($process.ExitCode -notin @(0, 3010)) {
+            Get-Content $log -Tail 100
+            throw "MSI install failed: $($process.ExitCode)"
+          }
+          try {
+            foreach ($file in @('vnote.exe', 'VTextEdit.dll', 'Qt6Pdf.dll', 'vtextedit_typst.dll', 'platforms/qwindows.dll')) {
+              if (-not (Test-Path (Join-Path $installDir $file))) { throw "Installed file missing: $file" }
+            }
+          }
+          finally {
+            $process = Start-Process msiexec.exe -ArgumentList @('/x', "`"$msi`"", '/qn', '/norestart') -Wait -PassThru
+            if ($process.ExitCode -notin @(0, 3010)) { throw "MSI uninstall failed: $($process.ExitCode)" }
+          }
+          New-Item -ItemType Directory -Path fork-release | Out-Null
+          foreach ($extension in @('msi', 'zip')) {
+            Copy-Item "$base.$extension" "fork-release/VNote-Fork-$env:VNOTE_VER-win64.$extension"
+          }
+          Get-ChildItem fork-release -File | Sort-Object Name | ForEach-Object {
+            $hash = (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+            "$hash  $($_.Name)"
+          } | Set-Content fork-release/SHA256SUMS.txt -Encoding ascii
+
+      - name: Archive fork release assets
+        if: ${{ inputs.fork_release }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: fork-windows-release
+          path: ${{runner.workspace}}/build/fork-release/*
+          if-no-files-found: error
+          compression-level: 0
+
       - name: Archive Artifacts
         uses: actions/upload-artifact@v4
         with:
@@ -560,7 +643,8 @@ jobs:
         # continuous prerelease.
         if: >-
           github.ref == 'refs/heads/master' &&
-          !startsWith(github.event.head_commit.message, '[Release]')
+          !startsWith(github.event.head_commit.message, '[Release]') &&
+          !inputs.fork_release
         shell: bash
         working-directory: ${{runner.workspace}}/build
         env:
