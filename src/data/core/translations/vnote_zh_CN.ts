@@ -984,6 +984,10 @@
         <source>A password or app password is required to enable WebDAV sync.</source>
         <translation>启用 WebDAV 同步需要密码或应用密码。</translation>
     </message>
+    <message>
+        <source>Use an HTTP or HTTPS repository URL with a host and path, or a file:/// URL. Enter the token separately; passwords, queries, and fragments are not allowed in the URL.</source>
+        <translation>请使用包含主机名和仓库路径的 HTTP 或 HTTPS 地址，或 file:/// 地址。令牌请单独填写；URL 中不能包含密码、查询参数或片段。</translation>
+    </message>
 </context>
 <context>
     <name>WebUtils</name>
@@ -8465,6 +8469,26 @@ Continue?</source>
         <source>Sync operation failed.</source>
         <translation>同步操作失败。</translation>
     </message>
+    <message>
+        <source>GitHub, GitHub Enterprise, and other Git hosts: use the repository clone URL, including any custom port. HTTP, HTTPS, and file:// are supported. HTTPS is recommended; HTTP sends credentials and data in plaintext</source>
+        <translation>支持 GitHub、GitHub Enterprise 和其他 Git 服务：请使用仓库克隆地址，并保留自定义端口。支持 HTTP、HTTPS 和 file://；建议使用 HTTPS，HTTP 会以明文传输凭据和数据</translation>
+    </message>
+    <message>
+        <source>Account on your Git server (optional for GitHub/Enterprise)</source>
+        <translation>Git 服务器账户名（GitHub/企业版可选）</translation>
+    </message>
+    <message>
+        <source>https://github.example.com/organization/notes.git</source>
+        <translation>https://github.example.com/organization/notes.git</translation>
+    </message>
+    <message>
+        <source>The remote repository must already exist. Create an empty repo on your Git host first. For GitHub Enterprise, use your enterprise server's HTTPS clone URL and a token created on that server with read and write access to the repository.</source>
+        <translation>远程仓库必须已存在。请先在 Git 服务器上创建一个空仓库。使用 GitHub 企业版时，请填写企业服务器上的 HTTPS 克隆地址，以及在该服务器上创建、具有仓库读写权限的令牌。</translation>
+    </message>
+    <message>
+        <source>Create the token on the repository's Git server (including GitHub Enterprise), with read and write access</source>
+        <translation>请在仓库所在的 Git 服务器（包括 GitHub 企业版）上创建令牌，并授予仓库读写权限</translation>
+    </message>
 </context>
 <context>
     <name>vnotex::NotificationButton2</name>
@@ -8987,6 +9011,22 @@ Continue?</source>
         <location line="+65"/>
         <source>Clone cancelled.</source>
         <translation>克隆已取消。</translation>
+    </message>
+    <message>
+        <source>GitHub, GitHub Enterprise, and other Git hosts: use the repository clone URL, including any custom port. HTTP, HTTPS, and file:// are supported. HTTPS is recommended; HTTP sends credentials and data in plaintext</source>
+        <translation>支持 GitHub、GitHub Enterprise 和其他 Git 服务：请使用仓库克隆地址，并保留自定义端口。支持 HTTP、HTTPS 和 file://；建议使用 HTTPS，HTTP 会以明文传输凭据和数据</translation>
+    </message>
+    <message>
+        <source>Account on your Git server (optional for GitHub/Enterprise)</source>
+        <translation>Git 服务器账户名（GitHub/企业版可选）</translation>
+    </message>
+    <message>
+        <source>https://github.example.com/organization/notes.git  or  file:///path/to/repo.git</source>
+        <translation>https://github.example.com/organization/notes.git  或  file:///path/to/repo.git</translation>
+    </message>
+    <message>
+        <source>Create the token on the repository's Git server (including GitHub Enterprise), with read and write access. Leave empty for anonymous download if the server permits it</source>
+        <translation>请在仓库所在的 Git 服务器（包括 GitHub 企业版）上创建令牌，并授予仓库读写权限。如果服务器允许匿名下载，可留空</translation>
     </message>
 </context>
 <context>

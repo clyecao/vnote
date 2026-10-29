@@ -984,6 +984,10 @@
         <source>A password or app password is required to enable WebDAV sync.</source>
         <translation>WebDAV 동기화를 활성화하려면 비밀번호 또는 앱 비밀번호가 필요합니다.</translation>
     </message>
+    <message>
+        <source>Use an HTTP or HTTPS repository URL with a host and path, or a file:/// URL. Enter the token separately; passwords, queries, and fragments are not allowed in the URL.</source>
+        <translation type="unfinished"></translation>
+    </message>
 </context>
 <context>
     <name>WebUtils</name>
@@ -8465,6 +8469,26 @@ Continue?</source>
         <source>Sync operation failed.</source>
         <translation>동기화 작업에 실패했습니다.</translation>
     </message>
+    <message>
+        <source>GitHub, GitHub Enterprise, and other Git hosts: use the repository clone URL, including any custom port. HTTP, HTTPS, and file:// are supported. HTTPS is recommended; HTTP sends credentials and data in plaintext</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Account on your Git server (optional for GitHub/Enterprise)</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>https://github.example.com/organization/notes.git</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>The remote repository must already exist. Create an empty repo on your Git host first. For GitHub Enterprise, use your enterprise server's HTTPS clone URL and a token created on that server with read and write access to the repository.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Create the token on the repository's Git server (including GitHub Enterprise), with read and write access</source>
+        <translation type="unfinished"></translation>
+    </message>
 </context>
 <context>
     <name>vnotex::NotificationButton2</name>
@@ -8987,6 +9011,22 @@ Continue?</source>
         <location line="+65"/>
         <source>Clone cancelled.</source>
         <translation>복제가 취소되었습니다.</translation>
+    </message>
+    <message>
+        <source>GitHub, GitHub Enterprise, and other Git hosts: use the repository clone URL, including any custom port. HTTP, HTTPS, and file:// are supported. HTTPS is recommended; HTTP sends credentials and data in plaintext</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Account on your Git server (optional for GitHub/Enterprise)</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>https://github.example.com/organization/notes.git  or  file:///path/to/repo.git</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Create the token on the repository's Git server (including GitHub Enterprise), with read and write access. Leave empty for anonymous download if the server permits it</source>
+        <translation type="unfinished"></translation>
     </message>
 </context>
 <context>

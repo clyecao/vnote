@@ -274,6 +274,9 @@ selected backends must match. A supplied WebDAV/Jianguoyun username requires a n
 never trimmed or prefilled. Same-URL WebDAV/Jianguoyun credential rotation authenticates and verifies the
 remote notebook UUID before changing its username binding. Git HTTPS username-only changes
 retain repository history and update origin through the existing initialization path.
+The Git-owned metadata allowlist includes the legacy `branches` directory created by
+some `git init` templates; its presence must not block username changes as invalid
+recovery state. Username-only changes preserve it along with refs and working files.
 
 ## Endpoint changes and recovery
 

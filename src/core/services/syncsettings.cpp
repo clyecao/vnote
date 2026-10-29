@@ -47,9 +47,19 @@ bool vnotex::isPasswordSyncBackend(const QString &p_backend) {
 QString vnotex::canonicalSyncRemoteUrl(const SyncSettings &p_settings) {
   const auto remoteUrl = p_settings.m_remoteUrl.trimmed();
   if (p_settings.m_backend == QLatin1String("git")) {
-    // Preserve the existing remote-open controller/dialog URL contract.
+    // GitHub Enterprise uses the same Git transport as public hosts. Preserve
+    // the supplied host, port, path and encoded username; never rewrite to github.com.
     static const QRegularExpression scheme(QStringLiteral("^(https?://|file:///)\\S+$"));
-    return scheme.match(remoteUrl).hasMatch() ? remoteUrl : QString();
+    const QUrl url(remoteUrl, QUrl::StrictMode);
+    if (!scheme.match(remoteUrl).hasMatch() || !url.isValid() || url.hasQuery() || url.hasFragment() ||
+        url.userInfo(QUrl::FullyEncoded).contains(QLatin1Char(':'))) {
+      return QString();
+    }
+    if (url.scheme() != QLatin1String("file") &&
+        (url.host().isEmpty() || url.path().isEmpty() || url.path() == QLatin1String("/"))) {
+      return QString();
+    }
+    return remoteUrl;
   }
   if (!isPasswordSyncBackend(p_settings.m_backend)) {
     return QString();
@@ -111,8 +121,10 @@ QString vnotex::validateSyncSettings(const SyncSettings &p_settings, bool p_requ
   }
   if (canonicalSyncRemoteUrl(p_settings).isEmpty()) {
     if (p_settings.m_backend == QLatin1String("git")) {
-      return QCoreApplication::translate("SyncSettings",
-                                         "Remote URL must use HTTP, HTTPS, or file:// scheme.");
+      return QCoreApplication::translate(
+          "SyncSettings", "Use an HTTP or HTTPS repository URL with a host and path, "
+                          "or a file:/// URL. Enter the token separately; passwords, "
+                          "queries, and fragments are not allowed in the URL.");
     }
     if (p_settings.m_backend == QLatin1String("jianguoyun")) {
       return QCoreApplication::translate("SyncSettings",

@@ -78,6 +78,14 @@ omits a style leaves that decoration disabled; do not inject light-theme default
 
 ## Git Sync Username
 
+GitHub Enterprise uses **Git** in both dialogs, with the HTTPS clone URL copied from
+the enterprise repository (for example `https://code.company.test:8443/team/notes.git`).
+Create the PAT on the same server as the repository and grant repository read/write
+access. Enterprise Server tokens and `github.com` tokens are not interchangeable.
+An explicit account login is optional for GitHub/Enterprise: the Git backend supplies
+a non-empty fallback username for PAT authentication. Other hosts can require the
+token owner's actual login. Keep the enterprise configuration guidance translated.
+
 **Configure Sync / Sync Info** and **Open Notebook (Remote URL)** expose a
 `gitUsernameEdit` field. Gitee requires the PAT owner's account login, which may
 be different from the repository owner. Do not infer it from the URL path.

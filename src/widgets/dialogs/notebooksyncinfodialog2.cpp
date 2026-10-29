@@ -192,9 +192,10 @@ void NotebookSyncInfoDialog2::setupUI() {
   // 2. Remote URL (editable).
   m_remoteUrlEdit = WidgetsFactory::createLineEdit(centralWidget);
   m_remoteUrlEdit->setObjectName(QString::fromLatin1(kRemoteUrlEditName));
-  m_remoteUrlEdit->setPlaceholderText(tr("https://github.com/example/notes.git"));
+  m_remoteUrlEdit->setPlaceholderText(tr("https://github.example.com/organization/notes.git"));
   m_remoteUrlEdit->setToolTip(
-      tr("Remote Git URL using HTTP, HTTPS, or file://. HTTPS is recommended; "
+      tr("GitHub, GitHub Enterprise, and other Git hosts: use the repository clone URL, "
+         "including any custom port. HTTP, HTTPS, and file:// are supported. HTTPS is recommended; "
          "HTTP sends credentials and data in plaintext"));
   m_remoteUrlLabel = new QLabel(tr("Remote URL"), centralWidget);
   formLayout->addRow(m_remoteUrlLabel, m_remoteUrlEdit);
@@ -208,7 +209,9 @@ void NotebookSyncInfoDialog2::setupUI() {
   m_remoteUrlHintLabel = new QLabel(centralWidget);
   m_remoteUrlHintLabel->setObjectName(QString::fromLatin1(kRemoteUrlHintLabelName));
   m_remoteUrlHintLabel->setText(
-      tr("The remote repository must already exist. Create an empty repo on your Git host first."));
+      tr("The remote repository must already exist. Create an empty repo on your Git host first. "
+         "For GitHub Enterprise, use your enterprise server's HTTPS clone URL and a token "
+         "created on that server with read and write access to the repository."));
   m_remoteUrlHintLabel->setWordWrap(true);
   // Muted hint text. NOT setEnabled(false): that would advertise
   // QAccessible::State::unavailable for what is ordinary instructional text,
@@ -234,7 +237,8 @@ void NotebookSyncInfoDialog2::setupUI() {
 
   m_gitUsernameEdit = WidgetsFactory::createUrlUserNameEdit(m_remoteUrlEdit, centralWidget);
   m_gitUsernameEdit->setObjectName(QLatin1String(kGitUsernameEditName));
-  m_gitUsernameEdit->setPlaceholderText(tr("Required by Gitee; optional for GitHub"));
+  m_gitUsernameEdit->setPlaceholderText(
+      tr("Account on your Git server (optional for GitHub/Enterprise)"));
   m_gitUsernameEdit->setToolTip(
       tr("Login of the Personal Access Token owner, not necessarily the repository owner"));
   m_gitUsernameLabel = new QLabel(tr("Git user name"), centralWidget);
@@ -645,13 +649,15 @@ void NotebookSyncInfoDialog2::refreshBackendFields() {
       !available        ? QString()
       : managed         ? tr("https://dav.jianguoyun.com/dav/vnote-notebook/")
       : passwordBackend ? tr("https://example.com/dav/notebook/")
-                        : tr("https://github.com/example/notes.git"));
+                        : tr("https://github.example.com/organization/notes.git"));
   m_remoteUrlEdit->setToolTip(
       !available        ? QString()
       : managed         ? tr("Dedicated Jianguoyun collection, not the /dav/ account root")
       : passwordBackend ? tr("Dedicated existing HTTP or HTTPS notebook collection. "
                              "HTTP sends credentials and data in plaintext")
-                        : tr("Remote Git URL using HTTP, HTTPS, or file://. HTTPS is recommended; "
+                        : tr("GitHub, GitHub Enterprise, and other Git hosts: use the repository "
+                             "clone URL, including any custom port. HTTP, HTTPS, and file:// are "
+                             "supported. HTTPS is recommended; "
                              "HTTP sends credentials and data in plaintext"));
   m_remoteUrlHintLabel->setVisible(git && !m_rawNotebook);
   m_webdavHint->setSeverity(managed ? InlineBanner::Severity::Warning
@@ -688,7 +694,8 @@ void NotebookSyncInfoDialog2::refreshBackendFields() {
                                      "stored in notebook settings")
                         : passwordBackend
                             ? tr("Password or app password; never stored in notebook settings")
-                            : tr("Personal Access Token used to authenticate against the remote"));
+                            : tr("Create the token on the repository's Git server (including "
+                                 "GitHub Enterprise), with read and write access"));
   m_disableSyncButton->setVisible(m_syncEnabled && !m_rawNotebook && !m_preCreateMode &&
                                   !m_bootstrapMode);
   m_disableSyncButton->setEnabled(!m_applying);

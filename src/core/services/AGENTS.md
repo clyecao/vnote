@@ -139,7 +139,13 @@ Therefore a key may be erased from the index **only while the index still points
 
 `canonicalSyncRemoteUrl()` is the shared Git settings/open contract: accept explicit
 `http://`, `https://` and `file:///` URLs, trimming only surrounding whitespace. Reject
-SSH/SCP-style and `git://` URLs. Keep HTTPS examples and recommend HTTPS; the Git URL
+SSH/SCP-style and `git://` URLs. Validate syntax with `QUrl::StrictMode`; HTTP(S) URLs
+need a host and repository path. Reject URL passwords (even an empty password component),
+queries and fragments before credentials are stored or a backend is invoked.
+GitHub Enterprise Server and Enterprise Cloud use the existing `git` backend: retain
+custom hostnames, ports and encoded usernames without a domain allowlist or rewriting
+to `github.com`. No GitHub REST API endpoint is needed for notebook synchronization.
+Keep HTTPS examples and recommend HTTPS; the Git URL
 tooltips disclose that HTTP sends credentials and notebook data in plaintext.
 Username-only HTTP/HTTPS edits preserve the endpoint and local history; a scheme change
 is an endpoint change. Keep the PAT separate from the displayed and persisted remote URL.

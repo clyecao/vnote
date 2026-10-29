@@ -57,12 +57,18 @@ void TestNotebookSyncInfoDialog2::initTestCase() {
 
 void TestNotebookSyncInfoDialog2::testGitUsernameEditsRemoteWithoutExposingToken_data() {
   QTest::addColumn<QString>("scheme");
-  QTest::newRow("http") << QStringLiteral("http");
-  QTest::newRow("https") << QStringLiteral("https");
+  QTest::addColumn<QString>("repository");
+  QTest::newRow("http") << QStringLiteral("http") << QStringLiteral("gitee.com/team/notes.git");
+  QTest::newRow("https") << QStringLiteral("https") << QStringLiteral("gitee.com/team/notes.git");
+  QTest::newRow("github-enterprise")
+      << QStringLiteral("https") << QStringLiteral("code.company.test:8443/team/notes.git");
+  QTest::newRow("github-enterprise-cloud")
+      << QStringLiteral("https") << QStringLiteral("company.ghe.com/team/notes.git");
 }
 
 void TestNotebookSyncInfoDialog2::testGitUsernameEditsRemoteWithoutExposingToken() {
   QFETCH(QString, scheme);
+  QFETCH(QString, repository);
   ServiceLocator services;
   NotebookSyncInfoDialog2 dialog(services);
   auto *urlEdit = dialog.findChild<QLineEdit *>(QStringLiteral("remoteUrlEdit"));
@@ -71,28 +77,28 @@ void TestNotebookSyncInfoDialog2::testGitUsernameEditsRemoteWithoutExposingToken
   QVERIFY(urlEdit);
   QVERIFY(usernameEdit);
   QVERIFY(patEdit);
-  urlEdit->setText(scheme + QStringLiteral("://gitee.com/team/notes.git"));
+  urlEdit->setText(scheme + QStringLiteral("://") + repository);
   dialog.setBackend(QStringLiteral("git"));
   QVERIFY(usernameEdit->isEnabled());
   patEdit->setText(QStringLiteral("test-token"));
   QTest::keyClicks(usernameEdit, "contributor");
   QCOMPARE(dialog.enteredRemoteUrl(),
-           scheme + QStringLiteral("://contributor@gitee.com/team/notes.git"));
+           scheme + QStringLiteral("://contributor@") + repository);
   QCOMPARE(dialog.enteredSettings().m_credentials.m_secret, QStringLiteral("test-token"));
   QCOMPARE(patEdit->echoMode(), QLineEdit::Password);
 
   // Loading/resetting the authoritative URL must not retain the previous login.
-  urlEdit->setText(scheme + QStringLiteral("://other%40mail.test@gitee.com/team/notes.git"));
+  urlEdit->setText(scheme + QStringLiteral("://other%40mail.test@") + repository);
   QCOMPARE(usernameEdit->text(), QStringLiteral("other@mail.test"));
   usernameEdit->selectAll();
   QTest::keyClick(usernameEdit, Qt::Key_Backspace);
-  QCOMPARE(dialog.enteredRemoteUrl(), scheme + QStringLiteral("://gitee.com/team/notes.git"));
+  QCOMPARE(dialog.enteredRemoteUrl(), scheme + QStringLiteral("://") + repository);
   urlEdit->setText(QStringLiteral("file:///repo.git"));
   QVERIFY(!usernameEdit->isEnabled());
 
-  urlEdit->setText(scheme + QStringLiteral("://gitee.com/team/notes.git"));
+  urlEdit->setText(scheme + QStringLiteral("://") + repository);
   QTest::keyClicks(usernameEdit, "writer@mail.test");
-  const auto remote = scheme + QStringLiteral("://writer%40mail.test@gitee.com/team/notes.git");
+  const auto remote = scheme + QStringLiteral("://writer%40mail.test@") + repository;
   QCOMPARE(urlEdit->text(), remote);
   QVERIFY(!urlEdit->text().contains(patEdit->text()));
   auto *ok = dialog.getDialogButtonBox()->button(QDialogButtonBox::Ok);
@@ -293,6 +299,9 @@ void TestNotebookSyncInfoDialog2::testGitUsernameChangePreservesLocalHistory() {
                                {QStringLiteral("init"), QStringLiteral("--initial-branch=main"),
                                 QStringLiteral("--separate-git-dir"), gitDir, root}),
              0);
+    // Some Git distributions create this legacy directory by default. It must
+    // not make an otherwise valid repository look like corrupt recovery state.
+    QVERIFY(QDir().mkpath(gitDir + QStringLiteral("/branches")));
     const auto runGit = [&](QStringList p_args, QByteArray *p_output = nullptr) {
       QProcess process;
       process.start(QStringLiteral("git"), QStringList{QStringLiteral("--git-dir=") + gitDir,
@@ -361,6 +370,7 @@ void TestNotebookSyncInfoDialog2::testGitUsernameChangePreservesLocalHistory() {
     QCOMPARE(runGit({QStringLiteral("rev-parse"), QStringLiteral("keep-local")}, &retainedCommit),
              0);
     QCOMPARE(retainedCommit, originalCommit);
+    QVERIFY(QFileInfo(gitDir + QStringLiteral("/branches")).isDir());
     QVERIFY(note.open(QIODevice::ReadOnly));
     QCOMPARE(note.readAll(), QByteArray("local content not pushed anywhere\n"));
     QCOMPARE(credentials.m_credentials.m_secret, QStringLiteral("test-token"));

@@ -52,6 +52,19 @@ void TestSyncService::gitRemoteUrl_data() {
       << QStringLiteral("http://writer@example.invalid:8080/repo.git");
   QTest::newRow("https") << QStringLiteral("https://example.invalid/repo.git")
                          << QStringLiteral("https://example.invalid/repo.git");
+  QTest::newRow("github-enterprise-server")
+      << QStringLiteral("https://code.company.test/engineering/notes.git")
+      << QStringLiteral("https://code.company.test/engineering/notes.git");
+  QTest::newRow("github-enterprise-port-and-username")
+      << QStringLiteral("  https://writer%40company.test@code.company.test:8443/team/notes.git  ")
+      << QStringLiteral("https://writer%40company.test@code.company.test:8443/team/notes.git");
+  QTest::newRow("github-enterprise-cloud")
+      << QStringLiteral("https://company.ghe.com/team/notes.git")
+      << QStringLiteral("https://company.ghe.com/team/notes.git");
+  QTest::newRow("intranet-host") << QStringLiteral("https://code/team/notes")
+                                 << QStringLiteral("https://code/team/notes");
+  QTest::newRow("ipv6-port") << QStringLiteral("https://[::1]:8443/team/notes.git")
+                             << QStringLiteral("https://[::1]:8443/team/notes.git");
   QTest::newRow("file") << QStringLiteral("file:///tmp/repo.git")
                         << QStringLiteral("file:///tmp/repo.git");
   QTest::newRow("ssh") << QStringLiteral("ssh://git@example.invalid/repo.git") << QString();
@@ -60,6 +73,21 @@ void TestSyncService::gitRemoteUrl_data() {
   QTest::newRow("empty") << QString() << QString();
   QTest::newRow("whitespace") << QStringLiteral("http://example.invalid/repo name.git")
                              << QString();
+  QTest::newRow("missing-host") << QStringLiteral("https:///team/notes.git") << QString();
+  QTest::newRow("missing-project") << QStringLiteral("https://code.company.test/") << QString();
+  QTest::newRow("invalid-port") << QStringLiteral("https://code.company.test:70000/team/notes.git")
+                                << QString();
+  QTest::newRow("embedded-token")
+      << QStringLiteral("https://writer:secret@code.company.test/team/notes.git") << QString();
+  QTest::newRow("empty-password-component")
+      << QStringLiteral("https://writer:@code.company.test/team/notes.git") << QString();
+  QTest::newRow("query-token")
+      << QStringLiteral("https://code.company.test/team/notes.git?access_token=secret")
+      << QString();
+  QTest::newRow("fragment")
+      << QStringLiteral("https://code.company.test/team/notes.git#main") << QString();
+  QTest::newRow("malformed-escape")
+      << QStringLiteral("https://code.company.test/team/notes%ZZ.git") << QString();
 }
 
 void TestSyncService::gitRemoteUrl() {
@@ -84,6 +112,11 @@ void TestSyncService::invalidSettings_data() {
   QTest::newRow("git-empty-token")
       << QStringLiteral("git") << QStringLiteral("https://example.com/repo.git")
       << QStringLiteral("git") << QString() << QString() << int(VXCORE_ERR_INVALID_PARAM);
+  QTest::newRow("git-enterprise-embedded-token")
+      << QStringLiteral("git")
+      << QStringLiteral("https://writer:secret@code.company.test/team/notes.git")
+      << QStringLiteral("git") << QString() << QStringLiteral("token")
+      << int(VXCORE_ERR_INVALID_PARAM);
   QTest::newRow("git-empty-url") << QStringLiteral("git") << QString() << QStringLiteral("git")
                                  << QString() << QStringLiteral("token")
                                  << int(VXCORE_ERR_INVALID_PARAM);

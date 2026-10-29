@@ -25,7 +25,9 @@ bool isPasswordSyncBackend(const QString &p_backend);
 QString validateSyncSettings(const SyncSettings &p_settings, bool p_requireCredentials);
 
 // Returns an empty string for an invalid URL or unsupported backend. Git URLs are
-// only trimmed; password-backend URLs are fully encoded with one trailing slash.
+// only trimmed, including custom hosts/ports (GitHub Enterprise). Git URLs must
+// not contain passwords, queries or fragments. Password-backend URLs are fully
+// encoded with one trailing slash.
 QString canonicalSyncRemoteUrl(const SyncSettings &p_settings);
 
 // Returns compact C-API credential JSON, or empty for an unsupported backend.

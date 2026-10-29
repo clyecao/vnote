@@ -213,16 +213,18 @@ void OpenNotebookDialog2::setupRemotePage(QWidget *p_page) {
   m_remoteUrlEdit = new QLineEdit(p_page);
   m_remoteUrlEdit->setObjectName(QLatin1String(kRemoteUrlEditName));
   m_remoteUrlEdit->setPlaceholderText(
-      tr("https://github.com/user/repo.git  or  file:///path/to/repo.git"));
+      tr("https://github.example.com/organization/notes.git  or  file:///path/to/repo.git"));
   m_remoteUrlEdit->setToolTip(
-      tr("Remote Git URL using HTTP, HTTPS, or file://. HTTPS is recommended; "
+      tr("GitHub, GitHub Enterprise, and other Git hosts: use the repository clone URL, "
+         "including any custom port. HTTP, HTTPS, and file:// are supported. HTTPS is recommended; "
          "HTTP sends credentials and data in plaintext"));
   m_remoteUrlLabel = new QLabel(tr("Remote URL"), p_page);
   layout->addRow(m_remoteUrlLabel, m_remoteUrlEdit);
 
   m_remoteUsernameEdit = WidgetsFactory::createUrlUserNameEdit(m_remoteUrlEdit, p_page);
   m_remoteUsernameEdit->setObjectName(QLatin1String(kGitUsernameEditName));
-  m_remoteUsernameEdit->setPlaceholderText(tr("Required by Gitee; optional for GitHub"));
+  m_remoteUsernameEdit->setPlaceholderText(
+      tr("Account on your Git server (optional for GitHub/Enterprise)"));
   m_remoteUsernameEdit->setToolTip(
       tr("Login of the Personal Access Token owner, not necessarily the repository owner"));
   m_gitUsernameLabel = new QLabel(tr("Git username"), p_page);
@@ -300,12 +302,15 @@ void OpenNotebookDialog2::refreshBackendFields() {
   m_remoteUrlEdit->setPlaceholderText(
       managed           ? tr("https://dav.jianguoyun.com/dav/vnote-notebook/")
       : passwordBackend ? tr("https://example.com/dav/notebook/")
-                        : tr("https://github.com/user/repo.git  or  file:///path/to/repo.git"));
+                        : tr("https://github.example.com/organization/notes.git  or  "
+                             "file:///path/to/repo.git"));
   m_remoteUrlEdit->setToolTip(
       managed ? tr("Existing VNote-managed Jianguoyun collection, not the /dav/ account root")
       : passwordBackend ? tr("Existing HTTP or HTTPS collection containing one VNote notebook. "
                              "HTTP sends credentials and data in plaintext")
-                        : tr("Remote Git URL using HTTP, HTTPS, or file://. HTTPS is recommended; "
+                        : tr("GitHub, GitHub Enterprise, and other Git hosts: use the repository "
+                             "clone URL, including any custom port. HTTP, HTTPS, and file:// are "
+                             "supported. HTTPS is recommended; "
                              "HTTP sends credentials and data in plaintext"));
   m_secretLabel->setText(managed           ? tr("App password")
                          : passwordBackend ? tr("Password or app password")
@@ -316,8 +321,12 @@ void OpenNotebookDialog2::refreshBackendFields() {
   m_remotePatEdit->setToolTip(
       managed ? tr("Jianguoyun app password, not your account password. Anonymous download is not "
                    "supported")
-              : tr("Leave credentials empty to download anonymously if the server permits it. "
-                   "The notebook remains editable; add credentials later to start syncing"));
+      : passwordBackend
+          ? tr("Leave credentials empty to download anonymously if the server permits it. "
+               "The notebook remains editable; add credentials later to start syncing")
+          : tr("Create the token on the repository's Git server (including GitHub Enterprise), "
+               "with read and write access. "
+               "Leave empty for anonymous download if the server permits it"));
   m_webdavUsernameEdit->setPlaceholderText(managed ? tr("Required Jianguoyun account username")
                                                    : tr("Optional for anonymous download"));
   m_webdavUsernameEdit->setToolTip(

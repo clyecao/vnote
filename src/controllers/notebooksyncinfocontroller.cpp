@@ -42,7 +42,8 @@ const QStringList c_gitEntries = {
     QStringLiteral("hooks"),          QStringLiteral("info"),       QStringLiteral("objects"),
     QStringLiteral("refs"),           QStringLiteral("logs"),       QStringLiteral("index"),
     QStringLiteral("packed-refs"),    QStringLiteral("FETCH_HEAD"), QStringLiteral("ORIG_HEAD"),
-    QStringLiteral("COMMIT_EDITMSG"), QStringLiteral("shallow"),    QStringLiteral("rr-cache")};
+    QStringLiteral("COMMIT_EDITMSG"), QStringLiteral("shallow"),    QStringLiteral("rr-cache"),
+    QStringLiteral("branches")}; // Legacy Git metadata still created by some git init templates.
 
 bool pathPresent(const QString &p_path) {
   const QFileInfo info(p_path);

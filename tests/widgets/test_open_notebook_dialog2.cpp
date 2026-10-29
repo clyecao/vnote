@@ -419,6 +419,12 @@ void TestOpenNotebookDialog2::testInvalidRemoteUrlSchemeKeepsOpenDisabled() {
   QCoreApplication::processEvents(QEventLoop::AllEvents, 50);
   QVERIFY(!openBtn->isEnabled());
 
+  // A copied enterprise URL must not smuggle a token into notebook configuration.
+  urlEdit->setText(QStringLiteral("https://writer:secret@code.company.test/team/notes.git"));
+  QVERIFY(!openBtn->isEnabled());
+  urlEdit->setText(QStringLiteral("https://code.company.test/team/notes.git?access_token=secret"));
+  QVERIFY(!openBtn->isEnabled());
+
   delete svc;
 }
 
@@ -433,12 +439,20 @@ void TestOpenNotebookDialog2::testInvalidRemoteUrlSchemeKeepsOpenDisabled() {
 // =============================================================================
 void TestOpenNotebookDialog2::testValidRemoteUrlEnablesOpenButton_data() {
   QTest::addColumn<QString>("scheme");
-  QTest::newRow("http") << QStringLiteral("http");
-  QTest::newRow("https") << QStringLiteral("https");
+  QTest::addColumn<QString>("repository");
+  QTest::newRow("http") << QStringLiteral("http")
+                        << QStringLiteral("github.com/vnotex/test-notebook.git");
+  QTest::newRow("https") << QStringLiteral("https")
+                         << QStringLiteral("github.com/vnotex/test-notebook.git");
+  QTest::newRow("github-enterprise")
+      << QStringLiteral("https") << QStringLiteral("code.company.test:8443/team/notes.git");
+  QTest::newRow("github-enterprise-cloud")
+      << QStringLiteral("https") << QStringLiteral("company.ghe.com/team/notes.git");
 }
 
 void TestOpenNotebookDialog2::testValidRemoteUrlEnablesOpenButton() {
   QFETCH(QString, scheme);
+  QFETCH(QString, repository);
   ServiceLocator services;
   NotebookCoreService *svc = nullptr;
   buildServices(services, svc);
@@ -469,7 +483,7 @@ void TestOpenNotebookDialog2::testValidRemoteUrlEnablesOpenButton() {
   auto *openBtn = box->button(QDialogButtonBox::Open);
   QVERIFY(openBtn);
 
-  urlEdit->setText(scheme + QStringLiteral("://github.com/vnotex/test-notebook.git"));
+  urlEdit->setText(scheme + QStringLiteral("://") + repository);
   QCoreApplication::processEvents(QEventLoop::AllEvents, 50);
 
   // Without a destination, Open must still be disabled.
@@ -484,7 +498,7 @@ void TestOpenNotebookDialog2::testValidRemoteUrlEnablesOpenButton() {
   QVERIFY2(openBtn->isEnabled(),
            "Open must be enabled for a supported URL and a nonexistent destination");
 
-  if (scheme == QLatin1String("http")) {
+  {
     auto *usernameEdit = dialog.findChild<QLineEdit *>(QStringLiteral("gitUsernameEdit"));
     auto *patEdit = dialog.findChild<QLineEdit *>(QStringLiteral("remotePatEdit"));
     QVERIFY(usernameEdit && patEdit);
@@ -492,7 +506,7 @@ void TestOpenNotebookDialog2::testValidRemoteUrlEnablesOpenButton() {
     patEdit->setText(QStringLiteral("test-token"));
     QTest::keyClicks(usernameEdit, "writer@mail.test");
     QCOMPARE(urlEdit->text(),
-             QStringLiteral("http://writer%40mail.test@github.com/vnotex/test-notebook.git"));
+             scheme + QStringLiteral("://writer%40mail.test@") + repository);
     QVERIFY(!urlEdit->text().contains(patEdit->text()));
     QCOMPARE(patEdit->text(), QStringLiteral("test-token"));
     QCOMPARE(patEdit->echoMode(), QLineEdit::Password);
