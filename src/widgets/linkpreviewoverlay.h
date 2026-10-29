@@ -5,7 +5,6 @@
 #include <QPoint>
 #include <QRect>
 
-class QAction;
 class QMouseEvent;
 
 namespace vnotex {
@@ -32,6 +31,7 @@ public:
 
 signals:
   void closeRequested();
+  void openInNewTabsRequested();
   void visibilityChanged(bool p_visible);
 
 protected:
@@ -44,7 +44,6 @@ private:
   void scheduleRaise();
 
   ViewSplit2 *m_viewSplit = nullptr;
-  QAction *m_closeAction = nullptr;
   bool m_raisePending = false;
   QPoint m_dismissalPressPosition;
   bool m_dismissalPressActive = false;
