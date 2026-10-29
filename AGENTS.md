@@ -67,6 +67,32 @@ cmake --build .
 
 Testing (two suites, two build dirs): [tests/AGENTS.md](tests/AGENTS.md).
 
+### Pre-push verification (REQUIRED)
+
+Before pushing parent-repository or submodule changes, agents MUST:
+
+1. Determine the affected build and test targets from **all unpushed changes** relative
+   to the destination branch, not just the latest commit. Trace shared headers/APIs,
+   build configuration and submodule pins to dependent consumers; filenames alone
+   are not sufficient. Broaden coverage when the impact cannot be bounded safely.
+2. Build the affected application/library and test targets with tests enabled, using
+   a compatible Qt kit, compiler and build configuration. Include affected targets
+   that are excluded from the default build. An app-only build does not verify tests.
+3. Run the full registered test executables/suites covering those changes, including
+   affected native-editor or standalone submodule tests in their own build directories.
+   Unaffected targets and suites need not run. Follow [tests/AGENTS.md](tests/AGENTS.md)
+   and the platform's workflow for runtime setup.
+4. Verify the final code/configuration being pushed; rebuild and rerun affected checks
+   after subsequent changes. Report the scope rationale, commands, results, skips and
+   platform limits. If all unpushed changes are documentation-only, check the docs and
+   state that no build/test targets are affected; compilation and tests are not required.
+
+**Do not push when required builds or tests fail, time out or cannot run.** Fix the
+cause and verify again; never disable tests, weaken assertions or increase deadlines
+just to obtain a pass. If verification is unavailable, report the exact blocker and
+obtain an explicit user exception before pushing. A local pass is not proof that
+other operating systems or packaging gates pass; disclose that limitation.
+
 ### CI runner debugging (SSH)
 
 When a failure needs the hosted runner, follow the key-restricted SSH procedure in
