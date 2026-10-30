@@ -1,4 +1,14 @@
 # Changes
+## Unreleased
+* Add Open Link above Copy Link in mind-map URL context menus, preserving link-opening security prompts and read-only access
+* Expand in-app VNote Tips from 12 to 64 with documentation-backed Markdown, navigation, image, PDF, mind-map, export and customization guidance in English, Simplified Chinese and Korean ([source](https://github.com/vnotex/vnote-documentations))
+* Open localized release notes in a new read-only tab after upgrading VNote, with Simplified Chinese notes and English fallback; replace both bundled documents in the version release commit
+* Update vtextedit to `726b33c` and both vendored cmark copies to `6148f31`
+* Fix closing Markdown heading marker highlighting and preserve syntax backgrounds on the cursor line
+* Migrate to the new concealment API while preserving saved link-destination preferences
+* Move long-link concealment from Settings to the Markdown editor menu and enable Markdown marker concealment by default, with independent persisted preferences and saved opt-outs preserved
+* Rename the editor menu action "Toggle In-Place Preview" to "In-Place Preview"
+
 ## v4.12.0
 A feature release with editable link previews, native Markdown rendering, Typst math and stronger security on top of VNote 4.11.0:
 
