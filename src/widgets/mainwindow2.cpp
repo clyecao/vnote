@@ -379,8 +379,8 @@ void MainWindow2::setupUI() {
   m_recycleBinController->startAutomaticCleanup();
   // First-run experience: construct BEFORE kickOffPostInit() so the controller's
   // MainWindowAfterStart subscription (priority 5) is registered before the hook
-  // fires. Surface the created notebook via a queued connection so the explorer
-  // refresh runs after the synchronous hook-dispatch chain completes.
+  // fires. Surface the created or reopened notebook via a queued connection so
+  // the explorer refresh runs after the synchronous hook-dispatch chain completes.
   m_firstRunController = new FirstRunController(m_serviceLocator, this);
   connect(
       m_firstRunController, &FirstRunController::defaultNotebookCreated, this,
@@ -794,7 +794,7 @@ void MainWindow2::setupNotebookExplorer() {
 
 void MainWindow2::exportNotes(ViewWindow2 *p_source) {
   auto *source = p_source ? p_source : m_viewArea->getCurrentViewWindow();
-  if (source && source->getBuffer().isEncrypted()) {
+  if (source && source->isContentProtected()) {
     QMessageBox::information(this, tr("Export"), tr("Exporting encrypted notes is not supported."));
     return;
   }
@@ -868,6 +868,7 @@ void MainWindow2::setupViewArea() {
   // instance). This is an explicit handoff rather than relying on timer
   // ordering, so buffers are always registered in their vxcore workspace.
   connect(m_viewArea, &ViewArea2::corePropagationReady, this, [this]() {
+    const bool firstPostInit = !m_postInitComplete;
     m_postInitComplete = true;
     // Drain queued opens in arrival order; detached batches each get a fresh
     // detached window.
@@ -913,6 +914,9 @@ void MainWindow2::setupViewArea() {
     // Only then release queued Service capture requests: a capture opens a
     // buffer, which must land in the restored vxcore workspace.
     m_captureDispatcher.setReady();
+    if (firstPostInit) {
+      emit postInitFinished();
+    }
   });
 
   // Export requested from a view window's context menu. The source pointer is

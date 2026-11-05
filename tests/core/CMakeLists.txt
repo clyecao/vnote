@@ -427,12 +427,14 @@ add_qt_test(test_markdowneditorcontroller
     ${CMAKE_SOURCE_DIR}/src/widgets/dialogs/imageinsertdialog.cpp
     ${CMAKE_SOURCE_DIR}/src/widgets/dialogs/dialog.cpp
     ${CMAKE_SOURCE_DIR}/src/widgets/widgetsfactory.cpp
+    ${CMAKE_SOURCE_DIR}/src/widgets/plaintextedit.cpp
     ${CMAKE_SOURCE_DIR}/src/widgets/combobox.cpp
     ${CMAKE_SOURCE_DIR}/src/widgets/lineedit.cpp
     ${CMAKE_SOURCE_DIR}/src/widgets/lineeditwithsnippet.cpp
     ${CMAKE_SOURCE_DIR}/src/widgets/propertydefs.cpp
     ${CMAKE_SOURCE_DIR}/src/widgets/messageboxhelper.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/utils/widgetutils.cpp
+    ${CMAKE_SOURCE_DIR}/src/gui/utils/externallinkconfirmation.cpp
   LINKS
     core_services
     core_configs

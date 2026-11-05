@@ -13,6 +13,7 @@
 #include <core/fileopensettings.h>
 #include <core/services/buffer2.h>
 #include <core/services/buffercoreservice.h>
+#include <core/services/memorybuffersource.h>
 
 class QTimer;
 
@@ -23,6 +24,9 @@ class BufferSaveQueue;
 class NotebookIoGate;
 class SyncWorkQueueManager;
 struct SearchFileResult;
+class NoteOperationService;
+struct NoteOperationRequest;
+struct NoteOperationResult;
 
 // Auto-save policy for buffer content.
 // Matches EditorConfig::AutoSavePolicy values.
@@ -106,6 +110,13 @@ public:
   // @p_address: Virtual address (e.g., "vx://settings").
   // Returns a Buffer2 handle, or invalid Buffer2 on failure.
   Buffer2 openVirtualBuffer(const QString &p_address);
+
+  // Open an owned runtime document through the normal full-view routing path.
+  // Duplicate addresses keep the original callbacks/content. FileAfterOpen is
+  // emitted with an address, not a filesystem path; FileBeforeOpen is not fired.
+  Buffer2 openMemoryBuffer(MemoryBufferSource p_source,
+                           const FileOpenSettings &p_settings = FileOpenSettings(),
+                           VxCoreError *p_outErr = nullptr);
 
   // Close a buffer by ID.
   // Cleans up auto-save state and closes the buffer in vxcore.
@@ -342,7 +353,9 @@ public:
 
   // Capture the active or temporarily suspended writer without changing buffer content.
   // Returns false if no writer is available or its snapshot capture fails.
-  bool captureActiveWriterContent(const QString &p_bufferId, QString *p_outText) const;
+  // p_hasWriter distinguishes those cases, including temporarily suspended writers.
+  bool captureActiveWriterContent(const QString &p_bufferId, QString *p_outText,
+                                  bool *p_hasWriter = nullptr) const;
   // GUI-thread reservation after views are frozen and the save queue is idle.
   // Nonnull output captures current writer/raw bytes; protected capture requires
   // an authenticated editor. Null output reserves only a clean, unloaded protected
@@ -430,13 +443,26 @@ signals:
 
 private:
   friend class Buffer2;
-  struct SearchReplacement;
+  friend class NoteOperationService;
+  struct MemorySave;
+  struct MemoryBufferState;
+  struct MemoryBuffers;
+  MemoryBufferState *memoryBufferState(const QString &p_bufferId) const;
+  std::shared_ptr<MemorySave> enqueueMemorySave(const QString &p_bufferId, bool p_autoSave,
+                                                VxCoreError *p_error);
+  bool saveMemoryBuffer(const Buffer2 &p_buffer, VxCoreError *p_error);
+  bool waitForMemorySave(const std::shared_ptr<MemorySave> &p_save);
+  bool syncMemoryContent(const QString &p_bufferId, const QByteArray &p_content);
+  struct ContentReplacement;
+  int replaceContent(NoteOperationRequest p_request,
+                     std::function<void(NoteOperationResult)> p_complete);
   Buffer2 openReplacementBuffer(const NodeIdentifier &p_nodeId);
-  void startSearchReplacement(int p_token);
-  void prepareSearchReplacement(int p_token);
-  void dispatchSearchReplacement(int p_token);
-  void finishSearchReplacement(int p_token, bool p_changed, bool p_saved, const QString &p_error);
-  bool replacementIdentityCurrent(const SearchReplacement &p_request) const;
+  void startContentReplacement(int p_token);
+  void prepareContentReplacement(int p_token);
+  void dispatchContentReplacement(int p_token);
+  void finishContentReplacement(int p_token, bool p_changed, bool p_saved, const QString &p_error,
+                                const QString &p_errorCode = {});
+  bool replacementIdentityCurrent(const ContentReplacement &p_request) const;
   void onReplacementFinished(const QString &p_bufferId, quint64 p_revision, bool p_changed,
                              bool p_ok, const QString &p_error);
   bool replacementAffectsNode(const QString &p_notebookId, const QString &p_path,
@@ -497,9 +523,10 @@ private:
   // Set of buffer IDs with pending editor changes.
   QSet<QString> m_dirtyBuffers;
 
-  // Set of buffer IDs that are virtual (non-file-backed).
-  // Used to skip auto-save/sync for virtual buffers.
+  // Widget-only virtual buffers have no editor body. Memory documents must
+  // never enter this set: they participate in editor synchronization and saves.
   QSet<QString> m_virtualBufferIds;
+  std::unique_ptr<MemoryBuffers> m_memoryBuffers;
 
   enum BufferFlag : quint8 { ReadOnly = 1, Encrypted = 2, Converting = 4 };
   // Replaces the previous resolved/read-only sets; one cached lookup carries
@@ -531,7 +558,7 @@ private:
   // UTF-8 default. Cleared on closeBuffer; never persisted. GUI-thread only.
   QHash<QString, QString> m_bufferEncodings;
 
-  QHash<int, std::shared_ptr<SearchReplacement>> m_searchReplacements;
+  QHash<int, std::shared_ptr<ContentReplacement>> m_contentReplacements;
   QHash<QString, int> m_replacementReservations;
   QSet<QString> m_failedReplacements; // Unsaved recovery text must not be retried automatically.
   QHash<QString, QHash<QString, QString>> m_syncApplyBuffers;

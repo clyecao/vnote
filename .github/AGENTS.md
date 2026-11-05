@@ -37,6 +37,15 @@ The existing `[Release]` condition disables these suites for both kits. Both Qt 
 build and sign packages and run the signed-package ABI, consumer and WebEngine gates,
 including native Intel verification; do not describe Qt 6.9.3 as unit-test validated.
 
+### HTTP API test registration
+
+All test-enabled platform jobs run `scripts/e2e/smoke_http_api.py --check-registration`
+against the build tree. The five HTTP/auth/REST/adapter/lifecycle targets are mandatory;
+do not silently skip them when an HTTP dependency is missing. `cpp-httplib` is pinned and
+private to the standalone transport; no Qt HttpServer or embedded TLS package is required.
+Package its upstream license using the existing platform license destinations.
+The standalone vxcore strict-trash regression remains a separate core-suite responsibility.
+
 ## Interactive CI debugging
 
 Use this when a failure needs the real hosted OS, desktop, Qt kit or CI setup.
@@ -344,7 +353,20 @@ Build the probe with Qt's imported CMake targets, including their transitive hea
 not a hand-maintained framework/include list. Declare the ARM yield intrinsic before Qt headers
 on ARM hosts. Configure and compile share one 120-second budget; target only the host architecture.
 Use `BUILD_WITH_INSTALL_RPATH` with the signed package Frameworks directory and no SDK link-path
-RPATH additions. Keep the 45-second render and 15-second shutdown bounds and all locale checks.
+RPATH additions. Keep the 45-second render bound and all locale checks. Allow 60 seconds for
+graceful shutdown after rendering and mapping checks pass; QtWebEngine helper teardown must not
+share the shorter 15-second post-kill cleanup limit. Only a timeout in this post-mapping
+shutdown phase may retry the affected locale, with one retry budget shared by the entire gate.
+Use the same probe and signed package but a fresh home/profile; rendering, mappings and a clean
+zero exit must all pass again. A second shutdown timeout (even in another locale), rendering or
+mapping failure/timeout, or nonzero exit fails without retry. The native VNote consumer gate is
+unchanged and never retries.
+Before cleanup, retain attempt-specific stderr, failure phase, mapped paths and bounded owned-group
+process/stack diagnostics in `RUNNER_TEMP/vnote-package-diagnostics`. Missing native sampling is
+best-effort; failure to retain the original error/log or prove cleanup prevents retry. Signal only
+the probe's own unreaped process group, then drain/reap and verify no live group members remain.
+Recovered retries emit warnings, and the matrix-specific diagnostic upload runs on package-gate
+success as well as failure. Preserve first-attempt files; do not publish only the recovered result.
 
 ## Windows runtime (Qt 6)
 

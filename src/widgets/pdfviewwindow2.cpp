@@ -141,8 +141,10 @@ void PdfViewWindow2::setupToolBar() {
   // separated from them, exactly where MarkdownViewWindow2 puts its formatting
   // actions. They are the content-authoring verbs for this window; the right
   // group is for view-level chrome (outline, layout, find).
-  toolBar->addSeparator();
-  setupAnnotationToolBarActions(toolBar);
+  if (getBuffer().isFileBacked()) {
+    toolBar->addSeparator();
+    setupAnnotationToolBarActions(toolBar);
+  }
 
   addRightCommonToolBarActions(toolBar, false);
 }
@@ -200,6 +202,7 @@ void PdfViewWindow2::setupViewerToolBarActions(QToolBar *p_toolBar) {
         return ViewWindowToolBarHelper2::generateIcon(services, p_iconName);
       },
       [this, p_toolBar]() {
+        addAction(p_toolBar, ViewWindowToolBarHelper2::MindMap);
         // Outline popup button: wire it to this window's outline provider. It
         // needs the ServiceLocator and the provider, which is exactly why
         // PdfViewerToolBar takes a hook rather than building it itself.
@@ -458,6 +461,12 @@ QSharedPointer<CommentProvider> PdfViewWindow2::getCommentProvider() const {
 }
 
 void PdfViewWindow2::setupComments() {
+  if (!getBuffer().isFileBacked()) {
+    if (auto *a = adapter()) {
+      a->setCommentsEditable(false);
+    }
+    return;
+  }
   m_commentProvider.reset(new CommentProvider(nullptr));
   m_commentController = new CommentController(getServices(), this);
 
@@ -588,6 +597,9 @@ void PdfViewWindow2::registerReaderFlushParticipant() {
 }
 
 bool PdfViewWindow2::flushPendingReaderComments() {
+  if (!getBuffer().isFileBacked()) {
+    return true;
+  }
   if (m_documentResetPending) {
     // The incoming document is not exposed to JavaScript yet; only the dock
     // can have edits, and its controller is already a flush participant.
@@ -717,15 +729,17 @@ void PdfViewWindow2::setupViewer() {
   auto *pdfAdapter = new PdfViewerAdapter(nullptr);
   auto *profileService = getServices().get<WebEngineProfileService>();
   m_viewer = new PdfViewer(
-      pdfAdapter, themeService->getBaseBackground(), 1.0, this,
+      configMgr, pdfAdapter, themeService->getBaseBackground(), 1.0, this,
       profileService ? profileService->profile() : nullptr,
       [themeService](const QString &p_token) {
         return themeService->commentHighlightColor(p_token);
       },
       themeService->paletteColor(QStringLiteral("base#normal#border")));
   m_viewer->installEventFilter(this);
-  connect(m_viewer, &WebViewer::localFileOpenRequested, this, [](const QUrl &p_url) {
-    QDesktopServices::openUrl(QUrl::fromLocalFile(p_url.toLocalFile()));
+  connect(m_viewer, &WebViewer::localFileOpenRequested, this, [this](const QUrl &p_url) {
+    if (getBuffer().isFileBacked()) {
+      QDesktopServices::openUrl(QUrl::fromLocalFile(p_url.toLocalFile()));
+    }
   });
 
   // Escape leaves presentation mode. Driven entirely from Qt: see
@@ -949,8 +963,16 @@ void PdfViewWindow2::syncEditorFromBuffer() {
     const auto &templateHtml = tmplService->getPdfViewerTemplate();
 
     if (!templateHtml.isEmpty()) {
-      const auto contentPath = m_controller->buildAbsolutePath(buffer.nodeId());
-      m_documentToken = profileService->registerPdfDocument(contentPath);
+      if (buffer.isMemoryBacked()) {
+        VxCoreError error = VXCORE_OK;
+        auto content = buffer.getContentRaw(&error);
+        if (error == VXCORE_OK) {
+          m_documentToken = profileService->registerPdfDocument(std::move(content));
+        }
+      } else if (buffer.isFileBacked()) {
+        const auto contentPath = m_controller->buildAbsolutePath(buffer.nodeId());
+        m_documentToken = profileService->registerPdfDocument(contentPath);
+      }
       auto urlState = PdfViewWindowController::preparePdfUrl(m_documentToken);
       if (urlState.valid) {
         m_viewer->load(urlState.templateUrl);

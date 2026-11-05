@@ -21,6 +21,7 @@
 #include <QScopeGuard>
 #include <QUrl>
 
+#include <memory>
 #include <stdexcept>
 
 #include <controllers/mindmapviewwindowcontroller.h>
@@ -40,6 +41,7 @@
 #include <widgets/dialogs/linkinsertdialog.h>
 #include <widgets/dialogs/selectdialog.h>
 #include <widgets/imageviewer.h>
+#include <widgets/plaintextedit.h>
 #include <widgets/viewwindow2.h>
 
 using namespace vnotex;
@@ -117,7 +119,9 @@ m3::qt::EditorConfig editorConfig(ServiceLocator &p_services, const Buffer2 &p_b
     }
   }
   config.resourceBasePath = p_buffer.getResourceBasePath();
-  config.resolveRelativeUrls = !p_buffer.isEncrypted();
+  // Keep resolution with the buffer-aware host across rebinding. The native
+  // editor's resolution policy is immutable and an empty base otherwise uses cwd.
+  config.resolveRelativeUrls = false;
   // ViewWindow2 owns these window-scoped shortcuts. Native toolbar actions remain available.
   config.shortcuts.zoomIn.clear();
   config.shortcuts.zoomOut.clear();
@@ -150,10 +154,15 @@ MindMapEditor::MindMapEditor(ServiceLocator &p_services, const Buffer2 &p_buffer
   connect(this, &m3::qt::MindMapEditor::nodeImageContextMenuRequested, this,
           &MindMapEditor::populateImageContextMenu);
   connect(this, &m3::qt::MindMapEditor::nodeLinkActivated, this,
-          [this](const QString &, const QString &p_url) {
+          [this](const QString &, const QString &p_url, bool p_fromContextMenu) {
             if (m_contentLoaded && canUseBuffer()) {
-              m_controller->requestOpenLink(
-                  p_url, m_viewWindow ? m_viewWindow->getLinkOpenSettings() : FileOpenSettings());
+              FileOpenSettings settings;
+              if (m_viewWindow) {
+                settings = m_viewWindow->getLinkOpenSettings(p_fromContextMenu);
+              } else {
+                settings.m_alwaysNewWindow = p_fromContextMenu;
+              }
+              m_controller->requestOpenLink(p_url, settings);
             }
           });
   connect(m_controller, &MindMapViewWindowController::externalLinkConfirmationRequested, this,
@@ -217,7 +226,73 @@ MindMapEditor::MindMapEditor(ServiceLocator &p_services, const Buffer2 &p_buffer
 
 MindMapEditor::~MindMapEditor() { closeImageViewer(); }
 
+QPlainTextEdit *MindMapEditor::createNoteEditor(QWidget *p_parent) {
+  return new PlainTextEdit(p_parent);
+}
 void MindMapEditor::setViewWindow(ViewWindow2 *p_viewWindow) { m_viewWindow = p_viewWindow; }
+
+void MindMapEditor::onEditNote(const QString &p_nodeId) {
+  const QString nodeId(p_nodeId);
+  if (!m_viewWindow || !canEdit() || m_buffer.getBuffer().isEmpty()) {
+    emit statusMessageRequested(tr("The mind map buffer is unavailable."));
+    return;
+  }
+  const auto record = nodeJson(nodeId);
+  auto settings = m_viewWindow->getPreviewOpenSettings();
+  if (record.isEmpty() || settings.m_previewSourceWindowId == 0) {
+    emit statusMessageRequested(tr("The mind map buffer is unavailable."));
+    return;
+  }
+  const auto note =
+      QJsonDocument::fromJson(record).object().value(QStringLiteral("note")).toString();
+  settings.m_mode = ViewWindowMode::Edit;
+  settings.m_forceMode = true;
+  settings.m_focus = true;
+  settings.m_alwaysNewWindow = true;
+
+  const QPointer<MindMapEditor> guard(this);
+  const auto generation = m_generation;
+  // BufferService copies the GUI finalizer before calling it. All copies must
+  // advance the same accepted baseline, including after duplicate activations.
+  const auto expectedNote = std::make_shared<QString>(note);
+  m_controller->requestEditNote(
+      nodeId, note, settings,
+      [guard, generation, nodeId, expectedNote](const QString &p_text) -> VxCoreError {
+        if (!guard || generation != guard->m_generation || !guard->m_viewWindow ||
+            !guard->m_contentLoaded || guard->m_loading || !guard->canUseBuffer() ||
+            guard->m_buffer.getBuffer().isEmpty()) {
+          return VXCORE_ERR_INVALID_STATE;
+        }
+        if (guard->isReadOnly() || guard->m_buffer.isReadOnly()) {
+          return VXCORE_ERR_READ_ONLY;
+        }
+        if (!guard->isEnabled()) {
+          return VXCORE_ERR_INVALID_STATE;
+        }
+        const auto record = guard->nodeJson(nodeId);
+        if (record.isEmpty()) {
+          return VXCORE_ERR_NOT_FOUND;
+        }
+        const auto currentNote =
+            QJsonDocument::fromJson(record).object().value(QStringLiteral("note")).toString();
+        if (currentNote != *expectedNote && currentNote != p_text) {
+          return VXCORE_ERR_FILE_CHANGED_OUTSIDE;
+        }
+        if (currentNote != p_text) {
+          const auto patch = QJsonDocument(QJsonObject{{QStringLiteral("note"), p_text}})
+                                 .toJson(QJsonDocument::Compact);
+          if (!guard->updateNode(nodeId, patch)) {
+            return VXCORE_ERR_INVALID_STATE;
+          }
+          // updateNode emits normal map notifications, which can rebind/destroy us.
+          if (!guard || generation != guard->m_generation) {
+            return VXCORE_ERR_INVALID_STATE;
+          }
+        }
+        *expectedNote = p_text;
+        return VXCORE_OK;
+      });
+}
 
 void MindMapEditor::populateImageContextMenu(const QString &p_nodeId, QMenu *p_menu) {
   const QPointer<MindMapEditor> guard(this);
@@ -507,7 +582,13 @@ void MindMapEditor::setBuffer(const Buffer2 &p_buffer) {
   if (!guard || generation != m_generation) {
     return;
   }
-  setResourceBasePath(m_buffer.getResourceBasePath());
+  const auto base = m_buffer.getResourceBasePath();
+  // The native setter resolves empty to cwd. Relative resolution is disabled
+  // there; our controller always resolves requests against the live buffer.
+  // Keep the unused native base rather than turning absence into cwd access.
+  if (!base.isEmpty()) {
+    setResourceBasePath(base);
+  }
   if (!guard || generation != m_generation) {
     return;
   }

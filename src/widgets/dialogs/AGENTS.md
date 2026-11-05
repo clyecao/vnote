@@ -15,7 +15,7 @@ VNote dialogs use a mixed capitalization scheme. The rules below are the project
 | **Placeholders** (the gray helper text inside `QLineEdit`) | **sentence case**, no trailing period | `"Folder to clone into (must not exist or be empty)"`, `"Optional (empty to open as read-only)"` |
 | **Buttons** (`QPushButton`, `QDialogButtonBox` buttons) | **Title Case** | `"Open"`, `"Browse"`, `"Disable Sync"`, `"Close Notebook"` |
 | **Window / dialog titles** (`setWindowTitle`, `QFileDialog` title) | **Title Case** | `"Open Notebook"`, `"Select Local Root Folder"`, `"Manage Notebooks"` |
-| **Tooltips** | sentence form, **end with a period** | `"Remote git URL. Only HTTPS and file:// schemes are supported."` |
+| **Tooltips** | sentence form, **no terminal punctuation** | `"Remote git URL. Only HTTPS and file:// schemes are supported"` |
 | **Banner / info-text messages** (`setInformationText`) | sentence form, **end with a period** | `"Local root folder must be empty (contains 3 item(s))."`, `"Cloning..."` |
 | **Radio button / checkbox labels** | **sentence case** | `"Local folder"`, `"Keep both"`, `"Expand Tab"` |
 | **ComboBox item labels** | **sentence case** (first word only) | `"Bundled notebook"`, `"No wrap"`, `"Web service"`, `"Local JAR"` |
@@ -26,7 +26,7 @@ VNote dialogs use a mixed capitalization scheme. The rules below are the project
 - **No trailing colon on field labels** matches the Settings pages, which are the largest labeled-field surface in the app and build every row through `SettingsPageHelper::createSettingRow` with colon-free labels (`"Auto save policy"`, `"Line ending"`, `"Content layout"`). A colon is redundant when the label already sits in a form-layout column next to its control.
 - **`QInputDialog` prompts keep their colon** because they are a prompt sentence introducing an entry field, not a column label, and Qt's own dialogs are written that way.
 - **Title-Case buttons + titles** match Windows and Qt's built-in widgets (`QDialogButtonBox` ships with `"Open"`, `"Cancel"`, `"Save"`, etc., already in Title Case).
-- **Tooltip periods** make tooltip strings reusable as `qInfo()` log lines and as accessible-name / accessible-description sources.
+- **Tooltips** follow the root tooltip-copy rule: keep punctuation between clauses, but no terminal punctuation; use lowercase parenthetical qualifiers such as `(restart required)`.
 - **Initialism preservation** prevents the OWASP-style "Personal access token" stripping that confuses GitHub/GitLab users searching for "PAT".
 
 ### When in doubt
@@ -38,6 +38,68 @@ VNote dialogs use a mixed capitalization scheme. The rules below are the project
 ### Test-discovery rule
 
 Tests find dialog widgets via `findChild<>("objectName")` — NOT by label text. Every interactive widget in a `*Dialog2` MUST have an `objectName` set via `setObjectName(QLatin1String(kFooName))` where `kFooName` is a top-of-file constant in the dialog's `.cpp`. Changing label TEXT is a UX change; changing an `objectName` is a TEST change. Keep them decoupled.
+
+## Settings Form Layout
+
+Settings pages use `settings/SettingsPageHelper` for card rows. This is a desktop form
+convention, not a rule that every input must occupy the same row as its label.
+
+- **Compact is the default:** ordinary combo boxes, spin boxes and short line edits keep
+  their label and input on one row when space permits. Use `createSettingRow()`; never
+  choose orientation by recursively searching for a `QLineEdit` (spin boxes contain one).
+- **FullWidth is deliberate:** pass `RowLayout::FullWidth` for paths, URLs, commands,
+  multiline editors and composites containing a multiline preview, including the Quick Note
+  template selector. Put the persistent label above the field. Choose based on content,
+  not whether the control is editable.
+- **Align, do not float:** compact fields share a font-relative preferred label column and
+  start at its trailing edge. Keep combo/spin controls at their natural width; let text fields
+  expand. Do not independently right-align fields, stretch numeric inputs across a card,
+  or add page-specific fixed-pixel label widths.
+- **Wrap rather than squeeze:** each compact row owns its `QFormLayout` with `WrapLongRows`;
+  labels also word-wrap. The shared column is a preferred width, not a minimum imposed on
+  the scroll area. Preserve height-for-width behavior at narrow sizes and after font changes.
+- **Labels remain visible:** placeholders show examples, never replace labels. Keep labels
+  sentence case without trailing colons. Bind the label to the actual focusable input; pass
+  `p_focusControl` for composites (the browse widget's line edit or the selector's combo),
+  not an unfocusable wrapper. Preserve explicit accessible names and descriptions. Helper
+  label clicks focus that input without changing its value.
+- **Descriptions and grouping:** place concise helper text below its row and allow it to
+  wrap across the available width. Use existing themed description/card properties, never
+  inline colors. Keep checkbox text beside the checkbox and use `createCheckBoxRow()`;
+  related checkbox lists retain a wrapping group heading rather than duplicate field labels.
+- **Card surfaces:** the `SettingsCard` owns its background. Set
+  `PropertyDefs::c_settingsContainer` on layout-only nested wrappers before first show;
+  every bundled theme makes only those opted-in card descendants transparent. Do not mark
+  inputs, buttons, lists or preview editors, apply blanket descendant transparency, or
+  change enabled state to obtain a colour. White/grey is not a saved/disabled/advanced
+  settings distinction. Keep borders and geometry: Native has a narrowly scoped explicit
+  frame rule for opted-in group boxes because a stylesheet background replaces native
+  frame painting. Page-level surfaces and other dialogs remain outside this rule. Custom
+  themes need the same container rule; a same-version development profile may need its
+  deployed bundled QSS refreshed, since Theme Refresh does not reinstall cached assets.
+- **Action rows:** standalone section and item actions are direction-aware leading-aligned
+  (left in LTR, right in RTL) and naturally sized, never stretched across the row. Keep
+  related buttons together, with trailing stretch; use `Qt::AlignLeading` for a single
+  button in a vertical layout. Match the container's content inset (16 horizontal / 6
+  vertical for Settings card action rows); destructive Remove/Delete actions use the same
+  rule and stay within their item group. Field-specific Browse/Test/Manage/Add Dictionary
+  actions remain adjacent to their input, or leading-aligned with that input when wrapped
+  below. Do not move the Apply/Reset toolbar or override native dialog-footer conventions.
+- **Provider-field exception:** Image Host's generated credential/URL/path/command forms
+  always use `WrapAllRows` and expanding fields. Never infer their layout from config keys
+  or credential values. Keep their edits directly parented to the provider `QGroupBox`:
+  reload finds the group through the first field's parent.
+- **Dynamic ownership is load-bearing:** File Associations' `programRow` / `systemRow`
+  flags stay on direct children of the card; inner helper rows may nest below them. Keep
+  Add Program after the program groups and Remove within its own group. Quick Note's
+  existing group remains the hide/disable owner, and its card keeps the `quicknote` name.
+
+For a settings layout change, inspect the native Settings surface at normal and narrow
+widths and enlarged fonts, in light and dark themes. Check aligned compact fields, stacked
+long fields, label-to-input focus, and no avoidable horizontal scrolling. Exercise Apply,
+Reset and search; for dynamic groups also verify add/remove and saved-value reloads, not
+just widget counts. Widths below a control's intrinsic usable minimum may require scrolling;
+do not clip labels or values to hide that limit.
 
 ## Banner Suppression Pattern (Quiet Dialog UX)
 
@@ -136,8 +198,12 @@ older schemes. Include this flag in scheme equality: a toggle-only edit must per
 Tray, toolbar, keyboard and tab-bar requests share the picker and honor the selected
 scheme; they do not override its destination. Quick notes still open in Edit mode.
 
-New schemes use `ConfigMgr2::getDefaultNotebookPath()`, shared with `FirstRunController`:
-`my_notebook` under Qt's writable Documents location, without an explicit home-folder fallback.
+Fresh `SessionConfig` instances start with **Quick Note in Current Notebook**, using the
+notebook-relative folder `Quick Notes` and filename `quick_note_%da%.md`, with no template.
+This is a constructor default only: loading saved schemes replaces it, without migration.
+
+Manually added schemes use `ConfigMgr2::getDefaultNotebookPath()`, shared with `FirstRunController`:
+`vnote_notebook` under Qt's writable Documents location, without an explicit home-folder fallback.
 The helper only calculates the path; startup creation still requires a version change
 and zero open notebooks. Existing schemes, including an explicitly empty Folder, are
 not migrated. `SystemTrayHelper` registers the configured `NewQuickNote` binding as an

@@ -13,6 +13,7 @@
 #include <core/coreconfig.h>
 #include <core/editorconfig.h>
 #include <core/error.h>
+#include <core/httpapiconfig.h>
 #include <core/mainconfig.h>
 #include <core/markdowneditorconfig.h>
 #include <core/mindmapeditorconfig.h>
@@ -60,6 +61,7 @@ private slots:
   void testExtraData_failureIsReportedThenHealsOnRetry();
   void testExtraData_successfulRetryOnTheSameInstanceClearsTheFailureList();
   void testExtraData_missingBundleFailsEveryFolderAndInstallsNothing();
+  void testExtraData_userCssSurvivesInstallAndFailedRecovery_data();
   void testExtraData_userCssSurvivesInstallAndFailedRecovery();
   void testExtraData_configVersionIsStampedEvenWhenACopyFailed();
 
@@ -99,6 +101,10 @@ private slots:
   void testMindMapEditor_defaultLayoutUsesMainConfig();
   void testMindMapEditor_settersPersistAndClearStyleIndependently();
   void testMindMapEditor_shortcutFilteringPreservesRawOverrides();
+
+  void testHttpApi_mergeAndPersistence();
+  void testHttpApi_rejectsMalformedSettings_data();
+  void testHttpApi_rejectsMalformedSettings();
 
   // Absent-key safety, which is provided by the defaults merge in ConfigMgr2::init().
   void testAbsentKeyKeepsTheCppDefaultForEveryField();
@@ -400,13 +406,12 @@ void TestConfigMgr2::testVersionUpgrade_data() {
   QTest::newRow("empty") << QStringLiteral("") << false;
   QTest::newRow("invalid") << QStringLiteral("unknown") << false;
   QTest::newRow("older") << QStringLiteral("0.0.1") << true;
-  QTest::newRow("numeric-order")
-      << QStringLiteral("4.9.0") << (QVersionNumber(4, 9, 0) < currentVersion);
-  QTest::newRow("numeric-order-leading-zero")
-      << QStringLiteral("0%1.%2.0")
-             .arg(currentVersion.majorVersion())
-             .arg(currentVersion.minorVersion() + 1)
-      << false;
+  QTest::newRow("numeric-order") << QStringLiteral("4.9.0")
+                                 << (QVersionNumber(4, 9, 0) < currentVersion);
+  QTest::newRow("numeric-order-leading-zero") << QStringLiteral("0%1.%2.0")
+                                                     .arg(currentVersion.majorVersion())
+                                                     .arg(currentVersion.minorVersion() + 1)
+                                              << false;
   QTest::newRow("same") << current << false;
   QTest::newRow("equivalent-short")
       << QVersionNumber::fromString(current).normalized().toString() << false;
@@ -482,10 +487,12 @@ QString TestConfigMgr2::buildExtraDataFixture(TempDirFixture &p_tmp) const {
   p_tmp.createTextFile(QStringLiteral("extra/templates/title.md"),
                        QString::fromLatin1(kBundledTemplateContent));
 
-  // The one user-owned file the install must never clobber.
+  // Both user-owned stylesheets must survive installation/recovery.
   p_tmp.createDir(QStringLiteral("extra/web/css"));
-  p_tmp.createTextFile(QStringLiteral("extra/web/css/user.css"),
-                       QStringLiteral("/* bundled stub */"));
+  for (const auto &name : {QStringLiteral("user.css"), QStringLiteral("export.css")}) {
+    p_tmp.createTextFile(QStringLiteral("extra/web/css/") + name,
+                         QStringLiteral("/* bundled stub */"));
+  }
   return root;
 }
 
@@ -638,7 +645,19 @@ void TestConfigMgr2::testExtraData_missingBundleFailsEveryFolderAndInstallsNothi
                              QLatin1String(FileUtils2::c_versionStampFileName)));
 }
 
+void TestConfigMgr2::testExtraData_userCssSurvivesInstallAndFailedRecovery_data() {
+  QTest::addColumn<QString>("name");
+  QTest::addColumn<QByteArray>("content");
+  for (const auto &name : {QStringLiteral("user.css"), QStringLiteral("export.css")}) {
+    QTest::newRow(qPrintable(name + QStringLiteral("-custom")))
+        << name << QByteArray("body { max-width: 65%; margin-inline: auto; }");
+    QTest::newRow(qPrintable(name + QStringLiteral("-empty"))) << name << QByteArray();
+  }
+}
+
 void TestConfigMgr2::testExtraData_userCssSurvivesInstallAndFailedRecovery() {
+  QFETCH(QString, name);
+  QFETCH(QByteArray, content);
   resetInstalledExtraData();
 
   TempDirFixture tmp;
@@ -646,7 +665,7 @@ void TestConfigMgr2::testExtraData_userCssSurvivesInstallAndFailedRecovery() {
   const QString fixture = buildExtraDataFixture(tmp);
 
   const QString webFolder = m_configMgr->getConfigDataFolder(ConfigMgr2::ConfigDataType::Web);
-  const QString userCss = webFolder + QStringLiteral("/css/user.css");
+  const QString userCss = webFolder + QStringLiteral("/css/") + name;
 
   {
     ConfigMgr2 mgr(m_configService);
@@ -662,7 +681,7 @@ void TestConfigMgr2::testExtraData_userCssSurvivesInstallAndFailedRecovery() {
   {
     QFile file(userCss);
     QVERIFY(file.open(QIODevice::WriteOnly | QIODevice::Truncate));
-    file.write("body { color: red; }");
+    QCOMPARE(file.write(content), content.size());
     file.close();
   }
 
@@ -688,9 +707,17 @@ void TestConfigMgr2::testExtraData_userCssSurvivesInstallAndFailedRecovery() {
 
   QFile file(userCss);
   QVERIFY(file.open(QIODevice::ReadOnly));
-  QCOMPARE(QString::fromUtf8(file.readAll()), QStringLiteral("body { color: red; }"));
+  QCOMPARE(file.readAll(), content);
+  file.close();
 
   QVERIFY(QDir(blocker).removeRecursively());
+  ConfigMgr2 healed(m_configService);
+  healed.setExtraDataSourceRootOverrideForTesting(fixture);
+  healed.init();
+  healed.initAfterQtAppStarted();
+  QVERIFY(healed.extraDataCopyFailures().isEmpty());
+  QVERIFY(file.open(QIODevice::ReadOnly));
+  QCOMPARE(file.readAll(), content);
 }
 
 // Pins the DELIBERATE decoupling: the data dump and the config migration are
@@ -1549,6 +1576,144 @@ void TestConfigMgr2::testMindMapEditor_shortcutFilteringPreservesRawOverrides() 
       raw);
 }
 
+void TestConfigMgr2::testHttpApi_mergeAndPersistence() {
+  // Exercise the actual absent-section and per-key merge before enabling a listener.
+  QVERIFY(!loadThroughMergePath(QJsonObject()).isEmpty());
+  {
+    ConfigMgr2 mgr(m_configService);
+    mgr.init();
+    auto &api = mgr.getConfig().getHttpApiConfig();
+    QVERIFY(api.isValid());
+    QVERIFY(!api.isEnabled());
+    QCOMPARE(api.getAddress(), QStringLiteral("127.0.0.1"));
+    QCOMPARE(api.getPort(), 18765);
+  }
+  QVERIFY(!loadThroughMergePath(QJsonObject{{QStringLiteral("httpApi"),
+                                             QJsonObject{{QStringLiteral("enabled"), true},
+                                                         {QStringLiteral("externalBaseUrl"),
+                                                          QJsonObject{{"obsolete", true}}}}}})
+               .isEmpty());
+  QString configFile;
+  {
+    ConfigMgr2 mgr(m_configService);
+    mgr.init();
+    auto &api = mgr.getConfig().getHttpApiConfig();
+    QVERIFY(api.isValid());
+    QVERIFY(api.isEnabled());
+    QCOMPARE(api.getPort(), 18765);
+    configFile = mgr.getFileFromConfigFolder(QStringLiteral("vnotex.json"));
+    QFile before(configFile);
+    QVERIFY(before.open(QIODevice::ReadOnly));
+    QVERIFY(QJsonDocument::fromJson(before.readAll())
+                .object()
+                .value("httpApi")
+                .toObject()
+                .value("externalBaseUrl")
+                .isObject());
+    before.close();
+    api.setAddress(QStringLiteral("::1"));
+    api.setPort(23456);
+    QVERIFY(api.isValid());
+  }
+  {
+    QFile after(configFile);
+    QVERIFY(after.open(QIODevice::ReadOnly));
+    const auto persisted =
+        QJsonDocument::fromJson(after.readAll()).object().value("httpApi").toObject();
+    QVERIFY(!persisted.contains("externalBaseUrl"));
+    QCOMPARE(persisted.value("enabled"), QJsonValue(true));
+    QCOMPARE(persisted.value("address").toString(), QStringLiteral("::1"));
+    QCOMPARE(persisted.value("port").toInt(), 23456);
+  }
+  {
+    ConfigMgr2 restarted(m_configService);
+    restarted.init();
+    auto &api = restarted.getConfig().getHttpApiConfig();
+    QVERIFY(api.isValid());
+    QVERIFY(api.isEnabled());
+    QCOMPARE(api.getAddress(), QStringLiteral("::1"));
+    QCOMPARE(api.getPort(), 23456);
+    api.setEnabled(false);
+  }
+  ConfigMgr2 disabled(m_configService);
+  disabled.init();
+  auto &api = disabled.getConfig().getHttpApiConfig();
+  QVERIFY(api.isValid());
+  QVERIFY(!api.isEnabled());
+  QCOMPARE(api.getAddress(), QStringLiteral("::1"));
+  QCOMPARE(api.getPort(), 23456);
+}
+
+void TestConfigMgr2::testHttpApi_rejectsMalformedSettings_data() {
+  QTest::addColumn<QJsonObject>("patch");
+  const QString section = QStringLiteral("httpApi");
+  auto field = [&section](const char *p_name, const QString &p_key, const QJsonValue &p_value) {
+    QTest::newRow(p_name) << QJsonObject{{section, QJsonObject{{p_key, p_value}}}};
+  };
+  field("enabled-string", QStringLiteral("enabled"), QStringLiteral("true"));
+  field("enabled-number", QStringLiteral("enabled"), 1);
+  field("enabled-null", QStringLiteral("enabled"), QJsonValue(QJsonValue::Null));
+  field("address-number", QStringLiteral("address"), 127);
+  field("address-null", QStringLiteral("address"), QJsonValue(QJsonValue::Null));
+  field("port-string", QStringLiteral("port"), QStringLiteral("18765"));
+  field("port-bool", QStringLiteral("port"), true);
+  field("port-null", QStringLiteral("port"), QJsonValue(QJsonValue::Null));
+  field("port-fraction", QStringLiteral("port"), 18765.5);
+  field("port-zero", QStringLiteral("port"), 0);
+  field("port-negative", QStringLiteral("port"), -1);
+  field("port-too-large", QStringLiteral("port"), 65536);
+  field("wildcard", QStringLiteral("address"), QStringLiteral("0.0.0.0"));
+  field("ipv6-wildcard", QStringLiteral("address"), QStringLiteral("::"));
+  field("nonloopback", QStringLiteral("address"), QStringLiteral("192.168.1.2"));
+  field("hostname", QStringLiteral("address"), QStringLiteral("localhost"));
+  field("short-ipv4", QStringLiteral("address"), QStringLiteral("127.1"));
+  field("other-loopback-ipv4", QStringLiteral("address"), QStringLiteral("127.0.0.2"));
+  field("scoped-ipv6", QStringLiteral("address"), QStringLiteral("::1%1"));
+  field("mapped-ipv6", QStringLiteral("address"), QStringLiteral("::ffff:127.0.0.1"));
+  QTest::newRow("enabled-invalid-port")
+      << QJsonObject{{section, QJsonObject{{QStringLiteral("enabled"), true},
+                                           {QStringLiteral("port"), QStringLiteral("18765")}}}};
+  QTest::newRow("section-string") << QJsonObject{{section, QStringLiteral("enabled")}};
+  QTest::newRow("section-bool") << QJsonObject{{section, true}};
+  QTest::newRow("section-array") << QJsonObject{{section, QJsonArray()}};
+  QTest::newRow("section-null") << QJsonObject{{section, QJsonValue(QJsonValue::Null)}};
+}
+
+void TestConfigMgr2::testHttpApi_rejectsMalformedSettings() {
+  QFETCH(QJsonObject, patch);
+  QVERIFY(!loadThroughMergePath(patch).isEmpty());
+  QJsonObject rejected;
+  {
+    ConfigMgr2 mgr(m_configService);
+    mgr.init();
+    auto &api = mgr.getConfig().getHttpApiConfig();
+    QString error;
+    QVERIFY(!api.isValid(&error));
+    QVERIFY(!error.isEmpty());
+    rejected = api.toJson();
+    // An unrelated preference save must not normalize the invalid API fields into
+    // valid defaults and silently permit startup on the next launch.
+    auto &core = mgr.getCoreConfig();
+    core.setAlwaysOpenNotesInNewTabs(!core.getAlwaysOpenNotesInNewTabs());
+  }
+  {
+    ConfigMgr2 restarted(m_configService);
+    restarted.init();
+    auto &api = restarted.getConfig().getHttpApiConfig();
+    QVERIFY(!api.isValid());
+    QCOMPARE(api.toJson(), rejected);
+    // Repair through the same setters used by Settings, rather than reconstructing config.
+    api.setEnabled(false);
+    api.setAddress(QStringLiteral("127.0.0.1"));
+    api.setPort(18765);
+    QVERIFY(api.isValid());
+  }
+  ConfigMgr2 repaired(m_configService);
+  repaired.init();
+  QVERIFY(repaired.getConfig().getHttpApiConfig().isValid());
+  QVERIFY(!repaired.getConfig().getHttpApiConfig().isEnabled());
+}
+
 // ============ Absent-key safety (the defaults merge) ============
 
 QJsonObject TestConfigMgr2::loadThroughMergePath(const QJsonObject &p_onDisk) const {
@@ -1769,9 +1934,9 @@ void TestConfigMgr2::testAnExplicitlyEmptiedUserOwnedMapIsNotResurrected() {
 
 void TestConfigMgr2::testAnExplicitNullDeletesTheKey() {
   // Pinning merge_patch's (RFC 7386) null semantics: a JSON null DELETES the key rather than
-  // selecting the default, so the read helper's zero value applies. Nothing VNote writes ever
-  // emits null - this documents the one hole in absent-key safety so a future change that
-  // starts emitting nulls is caught here rather than in the field.
+  // selecting the default, so the ordinary read helper's zero value applies.
+  // HttpApiConfig deliberately preserves nulls to reject malformed security settings;
+  // its separate regression ensures this invalid state survives subsequent writes.
   MainConfig defaults(m_configMgr);
   const QJsonObject defaultsJson = defaults.toJson();
 

@@ -65,10 +65,10 @@ reset therefore restarts daily eligibility and rotation without undoing opt-out.
 keys, then retires the old main-config keys through normal persistence. Explicit
 session values, including an empty date and index zero, take precedence.
 
-Select catalog translations using `QLocale().uiLanguages()` in preference order,
-trying each tag with underscores, its canonical `QLocale(tag).name()` key (so
-`zh-Hans-CN` can match `zh_CN` even without Qt-expanded aliases), and its language
-prefix before falling back to `en_US`.
+Select catalog translations using `QLocale().uiLanguages()` in preference order through
+`findLocalizedValue()` in `utils/localeutils.h` (shared with theme names and bundled docs).
+The tip callback trims each candidate; after no usable match, fall back to `en_US`.
+The helper's tag/canonical/language ordering is documented in `utils/AGENTS.md`.
 Do not use `getLocaleToUse()` here: it returns the regional-format locale, which
 can differ from the system UI language. Startup already applies explicit language
 settings through `QLocale::setDefault()` before tips are produced.
@@ -125,10 +125,19 @@ Markdown implementation. Consumer policy: [controllers](../controllers/AGENTS.md
 | `PrintUtils` | Print/export utilities |
 | `CommentColorSwatch` | The **single** way to render a `CommentColor` token as a chip in Qt chrome — see below |
 
+## Tree horizontal scrolling
+
+`TreeHorizontalScrollHelper` coalesces resize, show, expansion/collapse and model
+changes through one 50 ms single-shot timer. Start it only when inactive: continuous
+resizing still updates the column periodically instead of waiting for the drag to end.
+Each callback measures current content and viewport geometry. Tests should wait for
+column coverage or scrollbar behavior, not a fixed sleep or the timer interval.
+
 ## External-link confirmation
 
 `ExternalLinkConfirmation::ask()` (`utils/externallinkconfirmation.{h,cpp}`) owns
-the HTTP/HTTPS/FTP/mailto preference policy for Markdown, Typst and mind-map links.
+the shared warning preference for every URL scheme, including local files and custom
+protocols. Markdown, Typst, mind-map and desktop-opening warnings share this preference.
 It may show a modal warning but never changes configuration or opens the URL.
 Callers retain URL authorization and must recheck their lifetime, generation and
 availability after the modal returns, before calling the result's `accept()`.
@@ -138,9 +147,13 @@ controller requests with an empty URL so pending one-shot consent is consumed.
 
 `MessageBoxHelper::questionOpenLink()` owns the warning text and button choices,
 using the existing `MainWindow` translations. Keep that generic helper config-free.
-Local-file/program warnings never honor or modify the external-link opt-out.
-`WidgetUtils::openUrlByDesktop()` shares this warning UI but keeps its independent
-policy: HTTP/HTTPS and local directories open directly; other URLs require Yes/No.
+Every link warning offers **Yes / No / Never Ask**. Once accepted, **Never Ask**
+suppresses all link warnings, regardless of scheme or which caller opens the next link.
+`WidgetUtils::openUrlByDesktop()` receives configuration explicitly and uses the same
+confirmation helper for local-file/program and other non-direct URLs; HTTP/HTTPS and
+local directories continue to open directly. A destroyed originating parent discards
+the desktop-opening result. `WebViewer` receives guarded configuration for its fallback.
+URL authorization, including protected-note restrictions, remains independent.
 Coverage: `tests/gui/test_externallinkconfirmation.cpp` and Typst preview consent cases.
 
 ## CommentColorSwatch

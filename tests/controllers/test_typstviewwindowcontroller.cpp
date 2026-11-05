@@ -8,6 +8,7 @@
 #include <QFileInfo>
 #include <QImage>
 #include <QJsonDocument>
+#include <QMetaMethod>
 #include <QPointer>
 #include <QProcess>
 #include <QScopeGuard>
@@ -30,6 +31,7 @@
 #include <core/servicelocator.h>
 #include <core/services/bufferservice.h>
 #include <core/services/hookmanager.h>
+#include <core/services/memorybuffersource.h>
 #include <core/services/notebookcoreservice.h>
 #include <core/services/notebookiogate.h>
 #include <core/services/syncworkqueuemanager.h>
@@ -184,6 +186,9 @@ private slots:
   void init();
   void cleanup();
 
+  // Navigation group: project identity, source/link policy and one-shot consent.
+  void memoryBufferCapabilities_data();
+  void memoryBufferCapabilities();
   void unicodeProjectIdentityAndRetarget();
   void unavailableBuffer_data();
   void unavailableBuffer();
@@ -213,6 +218,8 @@ private slots:
   void nestedSameUrlAfterRetargetCannotReuseConsent();
   void destructionDuringConfirmation();
   void destructionDuringSourceOpen();
+
+  // Images group starts at imageStorage(); keep image-specific cases together.
   void imageStorage_data();
   void imageStorage();
   void imageNormalization_data();
@@ -223,6 +230,8 @@ private slots:
   void imageFolderContainment();
   void imageFolderJunctionEscape();
   void noCopyImageReferences();
+
+  // Resources group starts at resourceSourceRejection() and includes viewing cases.
   void resourceSourceRejection_data();
   void resourceSourceRejection();
   void resourceLinksAndOpenPolicy();
@@ -407,6 +416,87 @@ void TestTypstViewWindowController::verifySourceOpen(const NodeIdentifier &p_nod
   QCOMPARE(m_readOnlyAtOpen.constFirst(), p_readOnly);
   QCOMPARE(buffer.isReadOnly(), p_readOnly);
   QVERIFY(m_urlSink.opened.isEmpty());
+}
+
+void TestTypstViewWindowController::memoryBufferCapabilities_data() {
+  QTest::addColumn<bool>("rooted");
+  QTest::addColumn<bool>("readOnly");
+  QTest::newRow("rootless") << false << false;
+  QTest::newRow("rootless-read-only") << false << true;
+  QTest::newRow("resource-base") << true << false;
+  QTest::newRow("resource-base-read-only") << true << true;
+}
+
+void TestTypstViewWindowController::memoryBufferCapabilities() {
+  QFETCH(bool, rooted);
+  QFETCH(bool, readOnly);
+  MemoryBufferSource source;
+  source.address = QStringLiteral("vx://typst-memory-controller");
+  source.displayName = QStringLiteral("Memory document");
+  source.editorType = QStringLiteral("Typst");
+  source.content = QByteArrayLiteral("= Memory body\n");
+  source.readOnly = readOnly;
+  if (rooted) {
+    source.resourceBasePath = m_notebookPath;
+  }
+  const auto memory = m_buffers->openMemoryBuffer(source);
+  QVERIFY(memory.isValid());
+  QString error;
+  QVERIFY2(m_controller->setBuffer(memory, &error), qPrintable(error));
+  QCOMPARE(m_controller->getProject().memoryOnly, !rooted);
+  QCOMPARE(m_controller->getProject().root,
+           rooted ? QDir(m_notebookPath).canonicalPath() : QString());
+  QVERIFY(memory.resolvedPath().isEmpty());
+  clearOpenObservations();
+
+  const auto imagePath = QDir(m_notebookPath).filePath(QStringLiteral("resource.png"));
+  const auto bytes = imageBytes();
+  QVERIFY(writeFile(imagePath, bytes));
+  QVERIFY(!m_controller->decodeImageForViewing(bytes, &error).isNull());
+  QVERIFY(error.isEmpty());
+  QCOMPARE(m_controller->imageResourcePath(QStringLiteral("resource.png"), &error).isEmpty(),
+           !rooted);
+  QCOMPARE(m_controller->imageReference(QUrl::fromLocalFile(imagePath), &error).isEmpty(),
+           !rooted || readOnly);
+
+  const auto before = filesBelow(m_notebookPath);
+  QString created = QStringLiteral("stale");
+  QVERIFY(
+      m_controller->insertImage(bytes, QStringLiteral("never-stored"), &created, &error).isEmpty());
+  QVERIFY(created.isEmpty());
+  QVERIFY(!error.isEmpty());
+  QVERIFY(m_controller->readImageData(imagePath, &error).isEmpty());
+  QVERIFY(!m_controller->canAttach(QUrl::fromLocalFile(imagePath)));
+  QVERIFY(m_controller->insertAttachment(imagePath, &created, &error).isEmpty());
+  QVERIFY(created.isEmpty());
+  QCOMPARE(filesBelow(m_notebookPath), before);
+
+  const QUrl network(QStringLiteral("https://example.test/memory"));
+  QCOMPARE(m_controller->linkDestination(network.toString(), false, &error).isEmpty(), readOnly);
+  QSignalSpy consent(m_controller.get(),
+                     &TypstViewWindowController::externalLinkConfirmationRequested);
+  m_controller->requestOpenLink(network);
+  QCOMPARE(consent.count(), 1);
+  m_controller->openConfirmedExternalLink(network);
+  QCOMPARE(m_urlSink.opened, QList<QUrl>{network});
+
+  QSignalSpy errors(m_controller.get(), &TypstViewWindowController::errorOccurred);
+  m_controller->requestOpenSource(importedPath(), 0, 0);
+  if (rooted) {
+    QCOMPARE(m_openedBuffers.size(), 1);
+    QCOMPARE(m_openedBuffers.first().getContentRaw(), importedContent());
+  } else {
+    QCOMPARE(errors.count(), 1);
+    QVERIFY(m_openedBuffers.isEmpty());
+  }
+  clearOpenObservations();
+  errors.clear();
+  m_controller->requestOpenLink(QUrl::fromLocalFile(imagePath));
+  QCOMPARE(m_openedBuffers.size(), rooted ? 1 : 0);
+  QCOMPARE(errors.count(), rooted ? 0 : 1);
+  QCOMPARE(memory.getContentRaw(), source.content);
+  QVERIFY(m_buffers->closeBuffer(memory.id()));
+  QVERIFY(m_controller->decodeImageForViewing(bytes, &error).isNull());
 }
 
 void TestTypstViewWindowController::unicodeProjectIdentityAndRetarget() {
@@ -2150,5 +2240,60 @@ void TestTypstViewWindowController::revokedViewingBuffer() {
 
 } // namespace tests
 
-QTEST_MAIN(tests::TestTypstViewWindowController)
+// QApplication borrows argv; retain grouped argument storage through test execution.
+// clang-format off
+QTEST_MAIN_WRAPPER(
+    tests::TestTypstViewWindowController,
+    const auto group = qgetenv("VNOTE_TYPST_CONTROLLER_TEST_GROUP");
+    QList<QByteArray> names;
+    QList<char *> arguments;
+    if (!group.isEmpty()) {
+      if (group != "navigation" && group != "images" && group != "resources") {
+        qCritical() << "Unknown Typst controller test group:" << group;
+        return 1;
+      }
+      const auto &meta = tests::TestTypstViewWindowController::staticMetaObject;
+      const int imagesBegin = meta.indexOfSlot("imageStorage()");
+      const int resourcesBegin = meta.indexOfSlot("resourceSourceRejection()");
+      if (imagesBegin < meta.methodOffset() || resourcesBegin <= imagesBegin ||
+          resourcesBegin >= meta.methodCount()) {
+        qCritical() << "Invalid Typst controller test group boundaries";
+        return 1;
+      }
+      names.reserve(meta.methodCount() - meta.methodOffset());
+      for (int index = meta.methodOffset(); index < meta.methodCount(); ++index) {
+        const auto method = meta.method(index);
+        if (method.methodType() != QMetaMethod::Slot || method.access() != QMetaMethod::Private ||
+            method.parameterCount() != 0 || method.returnType() != QMetaType::Void) {
+          continue;
+        }
+        const auto name = method.name();
+        if (name.isEmpty() || name.endsWith("_data") || name == "initTestCase" ||
+            name == "cleanupTestCase" || name == "init" || name == "cleanup") {
+          continue;
+        }
+        const char *testGroup = index < imagesBegin ? "navigation"
+                               : index < resourcesBegin ? "images" : "resources";
+        if (group == testGroup) {
+          names.append(name);
+        }
+      }
+      if (names.isEmpty()) {
+        qCritical() << "No Typst controller tests in group:" << group;
+        return 1;
+      }
+      arguments.reserve(argc + names.size() + 1);
+      for (int index = 0; index < argc; ++index) {
+        arguments.append(argv[index]);
+      }
+      for (auto &name : names) {
+        arguments.append(name.data());
+      }
+      argc = static_cast<int>(arguments.size());
+      arguments.append(nullptr);
+      argv = arguments.data();
+    }
+    QTEST_MAIN_SETUP()
+)
+// clang-format on
 #include "test_typstviewwindowcontroller.moc"

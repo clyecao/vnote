@@ -18,6 +18,7 @@
 #include <utils/widgetutils.h>
 #include <vtextedit/spellchecker.h>
 #include <widgets/messageboxhelper.h>
+#include <widgets/propertydefs.h>
 #include <widgets/widgetsfactory.h>
 
 #include <core/widgetconfig.h>
@@ -157,6 +158,7 @@ void EditorPage::setupUI() {
 
   {
     auto *spellCheckWidget = new QWidget(this);
+    spellCheckWidget->setProperty(PropertyDefs::c_settingsContainer, true);
     auto *lineLayout = new QHBoxLayout(spellCheckWidget);
     lineLayout->setContentsMargins(0, 0, 0, 0);
 
@@ -181,7 +183,7 @@ void EditorPage::setupUI() {
           tr("Please download Hunspell's dictionaries, put them under (%1) and restart VNote.")
               .arg(dictsFolder),
           QString(), this);
-      WidgetUtils::openUrlByDesktop(QUrl::fromLocalFile(dictsFolder));
+      WidgetUtils::openUrlByDesktop(QUrl::fromLocalFile(dictsFolder), configMgr, this);
     });
     lineLayout->addWidget(addBtn);
 
@@ -190,7 +192,8 @@ void EditorPage::setupUI() {
     const QString label(tr("Spell check dictionary"));
     cardLayout->addWidget(SettingsPageHelper::createSeparator(this));
     cardLayout->addWidget(SettingsPageHelper::createSettingRow(
-        label, m_spellCheckDictComboBox->toolTip(), spellCheckWidget, this));
+        label, m_spellCheckDictComboBox->toolTip(), spellCheckWidget, this,
+        SettingsPageHelper::RowLayout::Compact, m_spellCheckDictComboBox));
     addSearchItem(label, m_spellCheckDictComboBox->toolTip(), m_spellCheckDictComboBox);
     connect(m_spellCheckDictComboBox, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
             &EditorPage::pageIsChanged);

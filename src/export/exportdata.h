@@ -2,6 +2,7 @@
 #define EXPORTDATA_H
 
 #include <QSharedPointer>
+#include <optional>
 
 class QPageLayout;
 
@@ -14,13 +15,18 @@ enum class ExportSource {
   Workspace
 };
 
-enum class ExportFormat { Markdown = 0, HTML, PDF, Custom };
+enum class ExportFormat { Markdown = 0, HTML = 1, PDF = 2, Custom = 3, Typst = 4, MindMap = 5 };
 
 struct ExportHtmlOption {
   QJsonObject toJson() const;
   void fromJson(const QJsonObject &p_obj);
 
   bool operator==(const ExportHtmlOption &p_other) const;
+
+  static bool defaultApplyCustomizedStyles(const QString &p_fileTypeName);
+
+  // Absent means follow the selected source types; a value is an explicit user choice.
+  std::optional<bool> m_applyCustomizedStyles;
 
   bool m_embedStyles = true;
 
@@ -189,6 +195,12 @@ inline QString exportFormatString(ExportFormat p_format) {
 
   case ExportFormat::Custom:
     return QStringLiteral("Custom");
+
+  case ExportFormat::Typst:
+    return QStringLiteral("Typst");
+
+  case ExportFormat::MindMap:
+    return QStringLiteral("MindMap");
   }
 
   return QStringLiteral("Unknown");

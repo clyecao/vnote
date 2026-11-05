@@ -529,6 +529,8 @@ class TestMarkdownWebJobs : public QObject {
 
 private slots:
   void initTestCase();
+  void htmlCodeBlocks();
+  void htmlMath();
   void allOperations_data();
   void allOperations();
   void graphAlgorithms_data();
@@ -908,6 +910,232 @@ void TestMarkdownWebJobs::typstAdapterBoundary() {
 void TestMarkdownWebJobs::initTestCase() {
   for (const auto &file : scripts()) {
     QVERIFY2(QFile::exists(webDir() + QStringLiteral("/js/") + file), qPrintable(file));
+  }
+}
+
+void TestMarkdownWebJobs::htmlCodeBlocks() {
+  struct Case {
+    const char *name;
+    QString html;
+    QString markdown;
+  };
+  const Case cases[] = {
+      {"gutter-is-not-language",
+       QStringLiteral(
+           "<div class=\"code-block\"><div class=\"line-numbers\">1</div><pre>x</pre></div>"),
+       QStringLiteral("```\nx\n```")},
+      {"nested-wrapper-language",
+       QStringLiteral("<div class=\"code-block\"><div "
+                      "class=\"highlight-source-python\"><pre>x</pre></div></div>"),
+       QStringLiteral("```python\nx\n```")},
+      {"reported-highlighted-pre",
+       QStringLiteral(
+           "<div class=\"md-code-block md-code-block-light\"><div "
+           "class=\"md-code-block-banner-wrap\"><div class=\"md-code-block-banner "
+           "md-code-block-banner-lite\"><div class=\"_121d384\"><div class=\"d2a24f03\"><span "
+           "class=\"d813de27\">c</span></div><div class=\"d2a24f03 _246a029\"><div "
+           "class=\"efa13877\"><div role=\"button\" class=\"ds-button\" tabindex=\"0\"><svg><path "
+           "/></svg><span class=\"code-info-button-text\">复制</span></div><div role=\"button\" "
+           "class=\"ds-button\" tabindex=\"0\"><svg><path /></svg><span "
+           "class=\"code-info-button-text\">下载</span></div></div></div></div></div></"
+           "div><pre><span><span class=\"token keyword\">char</span> thread_name<span "
+           "class=\"token punctuation\">[</span><span class=\"token number\">16</span><span "
+           "class=\"token punctuation\">]</span><span class=\"token "
+           "punctuation\">;</span></span>\n<span><span class=\"token "
+           "function\">pthread_getname_np</span><span class=\"token punctuation\">(</span><span "
+           "class=\"token function\">pthread_self</span><span class=\"token "
+           "punctuation\">(</span><span class=\"token punctuation\">)</span><span class=\"token "
+           "punctuation\">,</span> thread_name<span class=\"token punctuation\">,</span> <span "
+           "class=\"token keyword\">sizeof</span><span class=\"token "
+           "punctuation\">(</span>thread_name<span class=\"token punctuation\">)</span><span "
+           "class=\"token punctuation\">)</span><span class=\"token "
+           "punctuation\">;</span></span>\n<span><span class=\"token function\">printf</span><span "
+           "class=\"token punctuation\">(</span><span class=\"token string\">\"Current thread "
+           "name: %s\\n\"</span><span class=\"token punctuation\">,</span> thread_name<span "
+           "class=\"token punctuation\">)</span><span class=\"token "
+           "punctuation\">;</span></span></pre><svg class=\"_9bc997d _33882ae\"><path /></svg><svg "
+           "class=\"_9bc997d _28d7e84\"><path /></svg></div>"),
+       QStringLiteral(
+           "```c\nchar thread_name[16];\npthread_getname_np(pthread_self(), thread_name, "
+           "sizeof(thread_name));\nprintf(\"Current thread name: %s\\n\", thread_name);\n```")},
+      {"bare-pre-token-spans",
+       QStringLiteral(
+           "<pre><span>\tif (a_b[0] &lt; 2) {</span>\n<span>    run(\"\\n\");</span>\n}</pre>"),
+       QStringLiteral("```\n\tif (a_b[0] < 2) {\n    run(\"\\n\");\n}\n```")},
+      {"canonical-pre-code",
+       QStringLiteral("<pre><code class=\"language-js\">const x = 1;\n</code></pre>"),
+       QStringLiteral("```js\nconst x = 1;\n```")},
+      {"class-only-code-block",
+       QStringLiteral("<div class=\"code-block language-python\"><span>if ready:</span>\n<span>    "
+                      "print(\"ready\")</span></div>"),
+       QStringLiteral("```python\nif ready:\n    print(\"ready\")\n```")},
+      {"language-with-token-evidence",
+       QStringLiteral("<div class=\"language-python\"><span class=\"token keyword\">if</span> "
+                      "ready:\n    pass</div>"),
+       QStringLiteral("```python\nif ready:\n    pass\n```")},
+      {"language-prose-is-not-code",
+       QStringLiteral("<div class=\"language-en\">Ordinary English text</div>"),
+       QStringLiteral("Ordinary English text")},
+      {"class-substring-is-not-code",
+       QStringLiteral("<div class=\"decode-block\">Normal <strong>text</strong></div>"),
+       QStringLiteral("Normal **text**")},
+      {"highlight-prose-is-not-code",
+       QStringLiteral("<div class=\"highlight\"><p>Important <strong>text</strong></p></div>"),
+       QStringLiteral("Important **text**")},
+      {"inline-code-is-not-block", QStringLiteral("<p>Use <code>a_b</code> here</p>"),
+       QStringLiteral("Use `a_b` here")},
+      {"div-lines-and-empty-line",
+       QStringLiteral(
+           "<div class=\"sourceCode\"><div>one</div>\n<div><br></div>\n<div>  three</div></div>"),
+       QStringLiteral("```\none\n\n  three\n```")},
+      {"br-lines", QStringLiteral("<div class=\"codeblock\">a<br>  b<br><br>c</div>"),
+       QStringLiteral("```\na\n  b\n\nc\n```")},
+      {"language-precedence",
+       QStringLiteral("<div class=\"code-block language-c\"><pre data-language=\"python\"><code "
+                      "class=\"language-js\">value</code></pre></div>"),
+       QStringLiteral("```js\nvalue\n```")},
+      {"highlighter-wrapper",
+       QStringLiteral("<div class=\"highlight highlight-source-c\">\n<pre>int a_b[2];</pre></div>"),
+       QStringLiteral("```c\nint a_b[2];\n```")},
+      {"nested-wrappers-once",
+       QStringLiteral(
+           "<div class=\"code-block\"><div class=\"highlight\"><pre>a_b</pre></div></div>"),
+       QStringLiteral("```\na_b\n```")},
+      {"embedded-indented-fences", QStringLiteral("<pre>  ```\n````\n</pre>"),
+       QStringLiteral("`````\n  ```\n````\n`````")},
+      {"whitespace-only-code", QStringLiteral("<pre> \t\n\n</pre>"),
+       QStringLiteral("```\n \t\n\n```")},
+      {"mixed-container-keeps-prose",
+       QStringLiteral("<div class=\"highlight-source-c\"><pre>a_b</pre><p>Keep "
+                      "<strong>this</strong></p></div>"),
+       QStringLiteral("```\na_b\n```\n\nKeep **this**")},
+      {"multiple-snippets-stay-separate",
+       QStringLiteral("<div class=\"code-block\"><pre>one</pre><pre>two</pre></div>"),
+       QStringLiteral("```\none\n```\n\n```\ntwo\n```")},
+      {"outside-controls-preserved", QStringLiteral("<div role=\"button\">Copy</div><pre>x</pre>"),
+       QStringLiteral("Copy\n\n```\nx\n```")},
+      {"literal-closing-tags",
+       QStringLiteral(
+           "<div class=\"code-block language-html\">&lt;/pre&gt;\n&lt;!-- comment --&gt;</div>"),
+       QStringLiteral("```html\n</pre>\n<!-- comment -->\n```")},
+      {"generic-language-banner",
+       QStringLiteral("<div class=\"code-block\"><div "
+                      "class=\"code-header\"><span>Python</span><button>Copy</button></div><pre>if "
+                      "ready:\n    pass</pre></div>"),
+       QStringLiteral("```python\nif ready:\n    pass\n```")},
+      {"syntax-token-not-chrome",
+       QStringLiteral(
+           "<div class=\"codeblock\"><span class=\"token header\">header</span> = 1</div>"),
+       QStringLiteral("```\nheader = 1\n```")},
+      {"weak-code-class-prose", QStringLiteral("<div class=\"code\">Ordinary prose</div>"),
+       QStringLiteral("Ordinary prose")},
+      {"empty-code-block", QStringLiteral("<pre></pre>"), QStringLiteral("```\n\n```")},
+      {"invalid-language-token", QStringLiteral("<pre data-language=\"c&#10;```\">x</pre>"),
+       QStringLiteral("```\nx\n```")}};
+  // One real runtime covers normalization and the complete production converter.
+  Runtime runtime(true, QColor(17, 85, 153), QUrl::fromLocalFile(webDir() + QLatin1Char('/')));
+  QObject owner;
+  for (const auto &entry : cases) {
+    const auto job = submit(runtime.session, QStringLiteral("markdown.htmlToMarkdown"),
+                            source(entry.html), &owner);
+    QTRY_VERIFY_WITH_TIMEOUT(job->finished, 10000);
+    QVERIFY2(job->result.status == WebViewJobResult::Status::Success, entry.name);
+    QVERIFY2(job->result.value.toString() == entry.markdown,
+             qPrintable(QStringLiteral("%1\nExpected: %2\nActual: %3")
+                            .arg(QString::fromUtf8(entry.name), entry.markdown,
+                                 job->result.value.toString())));
+  }
+}
+
+void TestMarkdownWebJobs::htmlMath() {
+  const auto math = [](const QString &tex, const QString &display = QString()) {
+    return QStringLiteral("<math xmlns=\"http://www.w3.org/1998/Math/MathML\"%1><semantics>"
+                          "<mrow><mi>x</mi></mrow><annotation encoding=\"application/x-tex\">"
+                          "%2</annotation></semantics></math>")
+        .arg(display.isEmpty() ? QString() : QStringLiteral(" display=\"%1\"").arg(display),
+             tex.toHtmlEscaped());
+  };
+  const auto katex = [](const QString &mathml) {
+    return QStringLiteral("<span class=\"katex\"><span class=\"katex-mathml\">%1</span>"
+                          "<span class=\"katex-html\" aria-hidden=\"true\"><span class=\"base\">"
+                          "Rendered formula</span></span></span>")
+        .arg(mathml);
+  };
+  const QString formula =
+      QStringLiteral(R"(\operatorname{sinc}(x)=\frac{\sin x}{x},\qquad x\neq 0)");
+  const QString block = QStringLiteral("$$\n%1\n$$").arg(formula);
+  const QString x = math(QStringLiteral("x"));
+  struct Case {
+    const char *name;
+    QString html;
+    QString markdown;
+  };
+  const Case cases[] = {
+      {"reported-katex-display",
+       QStringLiteral("<span class=\"katex-display ds-markdown-math\">%1</span>")
+           .arg(katex(math(formula, QStringLiteral("block")))),
+       block},
+      {"inline-katex-with-prose",
+       QStringLiteral("<p>Before %1 after.</p>")
+           .arg(katex(math(QStringLiteral(R"(a_b^2+\alpha)")))),
+       QStringLiteral(R"(Before $a_b^2+\alpha$ after.)")},
+      {"generic-mathml-block",
+       QStringLiteral("Before%1After").arg(math(formula, QStringLiteral("block"))),
+       QStringLiteral("Before\n\n%1\n\nAfter").arg(block)},
+      {"generic-mathml-inline-and-entities", math(QStringLiteral(R"(a < b & \text{a_b*})")),
+       QStringLiteral(R"($a < b & \text{a_b*}$)")},
+      {"display-wrapper-without-display-attribute",
+       QStringLiteral("<span class=\"katex-display\">%1</span>").arg(katex(x)),
+       QStringLiteral("$$\nx\n$$")},
+      {"multiline-source-with-comment",
+       math(QStringLiteral("  \n\\begin{aligned}\na &= b \\\\\n% keep newline\nc &= d\n"
+                           "\\end{aligned}\n  ")),
+       QStringLiteral("$$\n\\begin{aligned}\na &= b \\\\\n% keep newline\nc &= d\n"
+                      "\\end{aligned}\n$$")},
+      {"annotation-boundary-whitespace", math(QStringLiteral(" \t x ")), QStringLiteral("$x$")},
+      {"adjacent-formulas", katex(x) + QStringLiteral(" + ") + katex(math(QStringLiteral("y"))),
+       QStringLiteral("$x$ + $y$")},
+      {"multiple-math-elements-in-one-shell",
+       QStringLiteral("<span class=\"katex\">%1 and %2</span>").arg(x, math(QStringLiteral("y"))),
+       QStringLiteral("$x$ and $y$")},
+      {"caption-outside-formula-shell",
+       QStringLiteral("<span class=\"katex-display\">%1<span>Keep caption</span></span>")
+           .arg(katex(x)),
+       QStringLiteral("$$\nx\n$$\n\nKeep caption")},
+      {"class-substring-is-not-shell",
+       QStringLiteral("<span class=\"not-katex\">%1 Keep text</span>").arg(x),
+       QStringLiteral("$x$ Keep text")},
+      {"unannotated-math", QStringLiteral("<math><mi>x</mi></math>"), QStringLiteral("x")},
+      {"empty-tex-annotation", math(QStringLiteral(" \n ")), QStringLiteral("x")},
+      {"encoding-case-insensitive",
+       QStringLiteral("<math><semantics><annotation encoding=\" Application/X-TeX \">"
+                      "x</annotation></semantics></math>"),
+       QStringLiteral("$x$")},
+      {"non-tex-annotation",
+       QStringLiteral("<math><semantics><annotation encoding=\"text/plain\">"
+                      "plain</annotation></semantics></math>"),
+       QStringLiteral("plain")},
+      {"annotation-outside-math",
+       QStringLiteral("<span><annotation encoding=\"application/x-tex\">x</annotation></span>"),
+       QStringLiteral("x")},
+      {"inline-code-keeps-literal-html", QStringLiteral("<code>%1</code>").arg(x.toHtmlEscaped()),
+       QStringLiteral("`%1`").arg(x)},
+      {"code-block-keeps-literal-html",
+       QStringLiteral("<pre><code>%1</code></pre>").arg(x.toHtmlEscaped()),
+       QStringLiteral("```\n%1\n```").arg(x)},
+      {"math-inside-inline-code-is-not-converted", QStringLiteral("<code>%1</code>").arg(x),
+       QStringLiteral("`xx`")}};
+  Runtime runtime(true);
+  QObject owner;
+  for (const auto &entry : cases) {
+    const auto job = submit(runtime.session, QStringLiteral("markdown.htmlToMarkdown"),
+                            source(entry.html), &owner);
+    QTRY_VERIFY_WITH_TIMEOUT(job->finished, 10000);
+    QVERIFY2(job->result.status == WebViewJobResult::Status::Success, entry.name);
+    QVERIFY2(job->result.value.toString() == entry.markdown,
+             qPrintable(QStringLiteral("%1\nExpected: %2\nActual: %3")
+                            .arg(QString::fromUtf8(entry.name), entry.markdown,
+                                 job->result.value.toString())));
   }
 }
 

@@ -56,6 +56,7 @@
 #include <utils/clipboardutils.h>
 #include <utils/htmlutils.h>
 
+#include "buttonpopup.h"
 #include "dialogs/imageinsertdialog.h"
 #include "dialogs/imagesizedialog.h"
 #include "dialogs/linkinsertdialog.h"
@@ -126,7 +127,7 @@ QUrl insertionResourceUrl(const QString &p_text, const QString &p_root) {
   if (text.size() > 1 && text.at(1) == QLatin1Char(':')) {
     return {};
   }
-  if (QFileInfo(QDir(p_root).filePath(text)).isFile()) {
+  if (!p_root.isEmpty() && QFileInfo(QDir(p_root).filePath(text)).isFile()) {
     QUrl result;
     result.setPath(text, QUrl::DecodedMode);
     return result;
@@ -141,7 +142,7 @@ QUrl insertionResourceUrl(const QString &p_text, const QString &p_root) {
       text.startsWith(QLatin1String("data:image/"), Qt::CaseInsensitive)) {
     return url;
   }
-  if (scheme.isEmpty() && url.authority().isEmpty() &&
+  if (!p_root.isEmpty() && scheme.isEmpty() && url.authority().isEmpty() &&
       QFileInfo(QDir(p_root).filePath(url.path(QUrl::FullyDecoded))).isFile()) {
     return url;
   }
@@ -149,7 +150,7 @@ QUrl insertionResourceUrl(const QString &p_text, const QString &p_root) {
 }
 
 QString insertionLocalFile(const QUrl &p_url, const QString &p_root) {
-  if (!p_url.isValid() || (!p_url.isLocalFile() && !p_url.scheme().isEmpty()) ||
+  if (p_root.isEmpty() || !p_url.isValid() || (!p_url.isLocalFile() && !p_url.scheme().isEmpty()) ||
       !p_url.authority().isEmpty()) {
     return {};
   }
@@ -196,7 +197,7 @@ void disposeRetiredEditor(const QPointer<vte::VTypstEditor> &p_editor) {
   };
   // Native context-menu paste can still be unwinding QMenu::exec. Never destroy
   // that menu's source while an owned popup/modal is running its nested loop.
-  if (owns(QApplication::activePopupWidget()) || owns(QApplication::activeModalWidget())) {
+  if (owns(ButtonPopup::activePopupWidget()) || owns(QApplication::activeModalWidget())) {
     QTimer::singleShot(0, p_editor, [p_editor] { disposeRetiredEditor(p_editor); });
   } else {
     p_editor->deleteLater();
@@ -396,7 +397,7 @@ struct TypstViewWindow::Insertion {
 
 bool TypstViewWindow::Insertion::prepareImage(const QString &p_source, const QImage &p_pixels,
                                               const QString &p_alt) {
-  if (!current()) {
+  if (!current() || !buffer.isFileBacked()) {
     return false;
   }
   if (!p_pixels.isNull() && !insertionPixelsAllowed(p_pixels)) {
@@ -520,6 +521,10 @@ TypstViewWindow::InsertionResult TypstViewWindow::insertFromMimeData(const QMime
   if (!operation.current()) {
     return InsertionResult::Cancelled;
   }
+  const bool storesImages = getBuffer().isFileBacked();
+  if (!storesImages && (htmlImage || pixels) && snapshot.text.isEmpty()) {
+    return InsertionResult::Cancelled;
+  }
   const bool batch = urls.size() > 1;
   InsertionKind kind = InsertionKind::Image;
   const bool directImage =
@@ -550,13 +555,17 @@ TypstViewWindow::InsertionResult TypstViewWindow::insertFromMimeData(const QMime
                  !m_controller->linkDestination(url.toString(QUrl::FullyEncoded), false).isEmpty();
     }
     if (htmlImage && pixels) {
-      add(tr("Insert From URL"), InsertionKind::ImageFromUrl);
-      add(tr("Insert From Image Data"), InsertionKind::ImageFromData);
+      if (storesImages) {
+        add(tr("Insert From URL"), InsertionKind::ImageFromUrl);
+        add(tr("Insert From Image Data"), InsertionKind::ImageFromData);
+      }
       if (!snapshot.text.isEmpty()) {
         add(tr("Insert As Text"), InsertionKind::Text);
       }
     } else if (pixels) {
-      add(tr("Insert As Image"), InsertionKind::Image);
+      if (storesImages) {
+        add(tr("Insert As Image"), InsertionKind::Image);
+      }
       add(tr("Insert As Text"), InsertionKind::Text);
     } else {
       if (!allImages && !allLinks) {
@@ -564,7 +573,9 @@ TypstViewWindow::InsertionResult TypstViewWindow::insertFromMimeData(const QMime
         return InsertionResult::Cancelled;
       }
       if (allImages) {
-        add(tr("Insert As Image"), InsertionKind::Image);
+        if (storesImages) {
+          add(tr("Insert As Image"), InsertionKind::Image);
+        }
         if (allReferences) {
           add(tr("Insert As Relative Image Link"), InsertionKind::RelativeImage);
         }
@@ -783,7 +794,7 @@ void TypstViewWindow::handleTypeAction(int p_action) {
 }
 
 void TypstViewWindow::typeImage() {
-  if (!canInsert() || m_insertion) {
+  if (!getBuffer().isFileBacked() || !canInsert() || m_insertion) {
     return;
   }
   const auto *mime = QApplication::clipboard()->mimeData();
@@ -850,8 +861,7 @@ void TypstViewWindow::pastePlainText() {
 
 bool TypstViewWindow::canViewResources() const {
   if (!isVisible() || !isEnabled() || !m_sourceAvailable || !m_typstEditor ||
-      !m_typstEditor->isVisible() || !m_typstEditor->isEnabled() ||
-      m_controller->getProject().root.isEmpty()) {
+      !m_typstEditor->isVisible() || !m_typstEditor->isEnabled()) {
     return false;
   }
   const auto live = getServices().get<BufferService>()->getBufferHandle(getBuffer().id());
@@ -1133,9 +1143,8 @@ void TypstViewWindow::hideEvent(QHideEvent *p_event) {
 
 bool TypstViewWindow::canInsert() const {
   if (m_imageOverlay || !isEnabled() || !m_sourceAvailable || !m_editor || !m_editor->isEnabled() ||
-      m_controller->getProject().root.isEmpty() || m_mode != ViewWindowMode::Edit ||
-      m_editor->isReadOnly() || !m_editor->getTextEdit()->isEnabled() ||
-      m_editor->getTextEdit()->isReadOnly()) {
+      m_mode != ViewWindowMode::Edit || m_editor->isReadOnly() ||
+      !m_editor->getTextEdit()->isEnabled() || m_editor->getTextEdit()->isReadOnly()) {
     return false;
   }
   const auto buffer = getServices().get<BufferService>()->getBufferHandle(getBuffer().id());
@@ -1158,7 +1167,8 @@ void TypstViewWindow::syncInsertionActions() {
   for (auto *action : {m_insertImageAction, m_insertLinkAction, m_plainPasteAction}) {
     if (action) {
       action->setVisible(m_mode == ViewWindowMode::Edit);
-      action->setEnabled(available);
+      action->setEnabled(available &&
+                         (action != m_insertImageAction || getBuffer().isFileBacked()));
     }
   }
 }
@@ -1199,8 +1209,8 @@ TypstViewWindow::TypstViewWindow(ServiceLocator &p_services, const Buffer2 &p_bu
             if (!controller) {
               return;
             }
-            if (!guard || guard->getBufferGeneration() != generation ||
-                !guard->m_sourceAvailable || !guard->isEnabled()) {
+            if (!guard || guard->getBufferGeneration() != generation || !guard->m_sourceAvailable ||
+                !guard->isEnabled()) {
               controller->openConfirmedExternalLink(QUrl());
               return;
             }
@@ -1230,7 +1240,7 @@ TypstViewWindow::~TypstViewWindow() {
     m_typstEditor->removeEventFilter(this);
     interaction->retiredEditor = m_typstEditor;
     const auto retired = interaction->retiredEditor;
-    if (auto *popup = QApplication::activePopupWidget(); popup && retired->isAncestorOf(popup)) {
+    if (auto *popup = ButtonPopup::activePopupWidget(); popup && retired->isAncestorOf(popup)) {
       popup->close();
     }
     retired->hide();
@@ -1281,8 +1291,10 @@ void TypstViewWindow::setupUI() {
   connect(this, &ViewWindow2::modeChanged, this, [this]() {
     showMessage(QString());
     statusBar()->setMaximumHeight(m_mode == ViewWindowMode::Read ? 0 : QWIDGETSIZE_MAX);
+    setStatusBarFixed(m_mode != ViewWindowMode::Read);
   });
   statusBar()->setMaximumHeight(m_mode == ViewWindowMode::Read ? 0 : QWIDGETSIZE_MAX);
+  setStatusBarFixed(m_mode != ViewWindowMode::Read);
 
   syncEditorFromBuffer();
   m_propagateEditorToBuffer = true;
@@ -1333,6 +1345,7 @@ void TypstViewWindow::setupPdfToolBar(QToolBar *p_toolBar) {
 }
 
 void TypstViewWindow::addAdditionalRightToolBarActions(QToolBar *p_toolBar) {
+  addAction(p_toolBar, ViewWindowToolBarHelper2::MindMap);
   auto *action = addAction(p_toolBar, ViewWindowToolBarHelper2::Outline);
   auto *button = qobject_cast<QToolButton *>(p_toolBar->widgetForAction(action));
   if (button) {
@@ -1469,6 +1482,7 @@ QSharedPointer<vte::TypstEditorConfig> TypstViewWindow::buildEditorConfig() cons
     config->m_initialZoom = m_typstEditor->pdfZoom();
   } else {
     const auto &project = m_controller->getProject();
+    config->m_memoryOnly = project.memoryOnly;
     config->m_projectRoot = project.root;
     config->m_mainFile = project.mainFile;
   }
@@ -1720,7 +1734,15 @@ void TypstViewWindow::showSourceError(const QString &p_error) {
 void TypstViewWindow::applyProjectIdentity() {
   const QString oldActiveFile = m_typstEditor->activeFile();
   const auto &project = m_controller->getProject();
-  m_typstEditor->setProject(project.root, project.mainFile);
+  if (m_typstEditor->getConfig().m_memoryOnly != project.memoryOnly) {
+    auto config = QSharedPointer<vte::TypstEditorConfig>::create(m_typstEditor->getConfig());
+    config->m_memoryOnly = project.memoryOnly;
+    config->m_projectRoot = project.root;
+    config->m_mainFile = project.mainFile;
+    m_typstEditor->setConfig(config);
+  } else {
+    m_typstEditor->setProject(project.root, project.mainFile);
+  }
   m_typstEditor->setActiveFile(project.mainFile);
   if (oldActiveFile != project.mainFile) {
     m_typstEditor->removeFileOverlay(oldActiveFile);

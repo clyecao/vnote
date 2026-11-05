@@ -65,7 +65,9 @@ public:
   bool enqueueReplacement(const QString &p_notebookId, const QString &p_bufferId,
                           const QString &p_resolvedPath, const QByteArray &p_expectedFileSha256,
                           const QByteArray &p_content, quint64 p_revision,
-                          const std::shared_ptr<std::atomic_bool> &p_cancelled);
+                          const std::shared_ptr<std::atomic_bool> &p_cancelled,
+                          std::function<bool()> p_authorized = {},
+                          const QString &p_canonicalPath = {});
 
   // Separate protected FIFO: no lease, generation, or backup flag is added
   // to ordinary SaveJob. Every accepted revision reports its actual result.
@@ -76,6 +78,12 @@ public:
                         std::function<void(int)> p_finished = {}, int p_gateTimeoutMs = -1);
   bool isProtectedBusy(const QString &p_bufferId) const;
   bool drainProtected(int p_timeoutMs);
+
+  // Owned immutable content operations. Execute runs on a worker, serially per
+  // buffer; complete runs on this object's thread with the actual result.
+  // Neither closure may borrow a live core Buffer on the worker. No coalescing.
+  bool enqueueContent(const QString &p_bufferId, std::function<int()> p_execute,
+                      std::function<void(int)> p_complete);
 
   // Stop accepting new jobs and wait up to @p_timeoutMs for in-flight workers
   // to drain, including exact/protected jobs. A negative timeout waits forever.
@@ -125,6 +133,8 @@ private:
     QString resolvedPath;
     QByteArray expectedFileSha256;
     std::shared_ptr<std::atomic_bool> cancelled;
+    std::function<bool()> authorized;
+    QString canonicalPath;
   };
 
   // Composite key "notebookId::bufferId" — pin buffer-level serialisation
@@ -142,6 +152,9 @@ private:
   struct ProtectedQueue;
   void runProtectedWorker(const QString &p_bufferId);
   std::unique_ptr<ProtectedQueue> m_protectedQueue;
+  struct ContentQueue;
+  void runContentWorker(const QString &p_bufferId);
+  std::unique_ptr<ContentQueue> m_contentQueue;
   IBufferCoreService &m_coreService;
   NotebookIoGate &m_gate;
 

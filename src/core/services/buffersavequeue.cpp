@@ -20,6 +20,7 @@
 
 #include <QCryptographicHash>
 #include <QFile>
+#include <QFileInfo>
 #include <QLoggingCategory>
 #include <QMutexLocker>
 #include <QSet>
@@ -67,6 +68,15 @@ struct BufferSaveQueue::ProtectedQueue {
   };
   mutable QMutex mutex;
   QWaitCondition drained;
+  QHash<QString, QQueue<Job>> pending;
+  QSet<QString> running;
+};
+
+struct BufferSaveQueue::ContentQueue {
+  struct Job {
+    std::function<int()> execute;
+    std::function<void(int)> complete;
+  };
   QHash<QString, QQueue<Job>> pending;
   QSet<QString> running;
 };
@@ -159,8 +169,10 @@ bool BufferSaveQueue::enqueueReplacement(const QString &p_notebookId, const QStr
                                          const QString &p_resolvedPath,
                                          const QByteArray &p_expectedFileSha256,
                                          const QByteArray &p_content, quint64 p_revision,
-                                         const std::shared_ptr<std::atomic_bool> &p_cancelled) {
-  if (m_coreService.isBufferReadOnly(p_bufferId)) {
+                                         const std::shared_ptr<std::atomic_bool> &p_cancelled,
+                                         std::function<bool()> p_authorized,
+                                         const QString &p_canonicalPath) {
+  if (m_coreService.isBufferReadOnly(p_bufferId) || p_expectedFileSha256.size() != 32) {
     return false;
   }
   const QString key = compositeKey(p_notebookId, p_bufferId);
@@ -178,6 +190,9 @@ bool BufferSaveQueue::enqueueReplacement(const QString &p_notebookId, const QStr
     job.expectedFileSha256 = p_expectedFileSha256;
     job.revision = p_revision;
     job.cancelled = p_cancelled;
+    job.authorized = std::move(p_authorized);
+    job.canonicalPath =
+        p_canonicalPath.isEmpty() ? QFileInfo(p_resolvedPath).canonicalFilePath() : p_canonicalPath;
     m_pending.insert(key, std::move(job));
     m_running.insert(key, JobType::Replacement);
     ++m_inFlightCount;
@@ -230,6 +245,10 @@ void BufferSaveQueue::runWorker(const QString &p_key) {
       if (job.type == JobType::Replacement) {
         auto cancelled = [&]() { return job.cancelled && job.cancelled->load(); };
         auto matchesDisk = [&]() {
+          const QFileInfo info(job.resolvedPath);
+          if (job.canonicalPath.isEmpty() || info.canonicalFilePath() != job.canonicalPath ||
+              !info.isFile() || !info.isWritable() || info.isSymbolicLink() || info.isJunction())
+            return false;
           QFile file(job.resolvedPath);
           QCryptographicHash hash(QCryptographicHash::Sha256);
           return file.open(QIODevice::ReadOnly) && hash.addData(&file) &&
@@ -242,6 +261,10 @@ void BufferSaveQueue::runWorker(const QString &p_key) {
         } else if (cancelled()) {
           // Hashing can take time; cancellation must still prevent installation.
           errMsg = QStringLiteral("Replacement cancelled.");
+        } else if (job.authorized && !job.authorized()) {
+          errMsg = QStringLiteral("Replacement authorization expired.");
+        } else if (QFileInfo(job.resolvedPath).canonicalFilePath() != job.canonicalPath) {
+          errMsg = QStringLiteral("The note path changed.");
         } else {
           persist(job.rawContent);
         }
@@ -406,6 +429,62 @@ void BufferSaveQueue::runProtectedWorker(const QString &p_bufferId) {
           if (finished)
             finished(static_cast<int>(result));
         },
+        Qt::QueuedConnection);
+  }
+}
+
+bool BufferSaveQueue::enqueueContent(const QString &p_bufferId, std::function<int()> p_execute,
+                                     std::function<void(int)> p_complete) {
+  if (p_bufferId.isEmpty() || !p_execute || !p_complete)
+    return false;
+  bool launch = false;
+  {
+    QMutexLocker lock(&m_mutex);
+    if (m_stopping)
+      return false;
+    if (!m_contentQueue)
+      m_contentQueue = std::make_unique<ContentQueue>();
+    m_contentQueue->pending[p_bufferId].enqueue({std::move(p_execute), std::move(p_complete)});
+    if (!m_contentQueue->running.contains(p_bufferId)) {
+      m_contentQueue->running.insert(p_bufferId);
+      ++m_inFlightCount;
+      launch = true;
+    }
+  }
+  if (launch)
+    QThreadPool::globalInstance()->start([this, p_bufferId]() { runContentWorker(p_bufferId); });
+  return true;
+}
+
+void BufferSaveQueue::runContentWorker(const QString &p_bufferId) {
+  for (;;) {
+    ContentQueue::Job job;
+    {
+      QMutexLocker lock(&m_mutex);
+      auto it = m_contentQueue->pending.find(p_bufferId);
+      if (it == m_contentQueue->pending.end() || it->isEmpty()) {
+        if (it != m_contentQueue->pending.end())
+          m_contentQueue->pending.erase(it);
+        m_contentQueue->running.remove(p_bufferId);
+        --m_inFlightCount;
+        if (!m_inFlightCount)
+          m_drained.wakeAll();
+        return;
+      }
+      job = it->dequeue();
+    }
+    int result = VXCORE_ERR_UNKNOWN;
+    try {
+      result = job.execute();
+    } catch (const std::bad_alloc &) {
+      result = VXCORE_ERR_OUT_OF_MEMORY;
+    } catch (...) {
+      result = VXCORE_ERR_UNKNOWN;
+    }
+    // Post before dropping worker accounting: shutdown cannot destroy the
+    // queue until every accepted operation's owner-thread completion is queued.
+    QMetaObject::invokeMethod(
+        this, [complete = std::move(job.complete), result]() { complete(result); },
         Qt::QueuedConnection);
   }
 }

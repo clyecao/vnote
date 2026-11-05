@@ -7,7 +7,7 @@ VNote binaries, together with the notices those licenses require us to keep.
 ## Scope
 
 This file covers the bundled **icon sets**, **libsodium cryptography dependency**,
-**Windows minisign verifier**, and **WebDAV transport/XML dependencies**.
+**Windows minisign verifier**, **WebDAV transport/XML dependencies**, and **HTTP server dependency**.
 
 It does **not** restate licenses that already ship next to the code they cover:
 
@@ -42,6 +42,18 @@ alongside these resources.
 Icon provenance below was established by comparing SVG path data against upstream, not
 by assuming from file names. Where that failed, the file says so — see
 [Unresolved](#unresolved) rather than treating this document as complete.
+
+---
+
+## cpp-httplib
+
+- **Upstream:** [cpp-httplib v0.64.0](https://github.com/yhirose/cpp-httplib/tree/24e58ce5b25d55045af4cd6f463e83a8082fbe6b)
+- **License:** MIT; Copyright (c) 2017 yhirose
+- **Use:** private HTTP/1.1 transport dependency of `vnote_http`, without optional TLS or compression
+
+The build redistributes the unmodified upstream `LICENSE` as `LICENSE.cpp-httplib` beside
+the Windows executable, in macOS `Contents/Resources`, or under Linux
+`${datadir}/licenses/vnote`. This dependency does not add Qt HTTP Server's GPL-only module.
 
 ---
 
@@ -97,15 +109,17 @@ new curl runtime; its bundle carries `LICENSE.pugixml` in `Contents/Resources`.
 - **License:** ISC, with an MIT-licensed subset inherited from Feather
 - **Full text:** [`licenses/Lucide-LICENSE.txt`](licenses/Lucide-LICENSE.txt) (verbatim copy of upstream `LICENSE`)
 
-Covers 63 files in `src/data/core/icons/`:
+Covers 78 files in `src/data/core/icons/`:
 
-- 61 carry `class="lucide lucide-<name>"`, which also records the upstream icon name;
+- 76 carry `class="lucide lucide-<name>"`, which also records the upstream icon name;
 - `read_only.svg` and `theme_switcher.svg` carry no class but are path-identical to
   upstream `pen-off` and `shirt`.
 
 `undo_editor.svg` and `redo_editor.svg` use upstream `undo-2` and `redo-2` (ISC).
 `view.svg` uses upstream [View](https://lucide.dev/icons/view) (ISC).
 `layout_dashboard_editor.svg` uses upstream [Layout Dashboard](https://lucide.dev/icons/layout-dashboard) (ISC).
+`brain_editor.svg` uses upstream [Brain](https://lucide.dev/icons/brain) (ISC).
+`folder_pen.svg` uses upstream [Folder Pen](https://lucide.dev/icons/folder-pen) (ISC).
 
 The files are modified from upstream in one respect: VNote rewrites Lucide
 `currentColor` stroke and fill values to explicit `#000000` so

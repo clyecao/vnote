@@ -28,6 +28,7 @@ on:
 env:
     VNOTE_VER: 0.1.1
     CARGO_BUILD_JOBS: 2
+    VNOTE_TEST_RETAINED_GIF_SNAPSHOT: '1'
 
 jobs:
   build:
@@ -171,8 +172,8 @@ jobs:
           REM needs its own `|| exit /b 1`. Without them a failed build (and the
           REM failed pack and failed extraction that follow it) was reported as
           REM a green step, and the run only died later in a packaging gate.
-          REM vtextedit tests belong to ALL even with VNOTE_BUILD_TESTS=OFF.
-          REM pack builds all release dependencies without compiling tests.
+          REM VNOTE_BUILD_TESTS controls both parent and bundled editor tests.
+          REM With tests OFF, pack builds release dependencies without test targets.
           if "%VNOTE_TESTS%"=="ON" (
             if "%FORK_RELEASE%"=="true" (
               cmake --build . --target test_syncservice test_sync_classifier test_notebooksyncinfocontroller test_notebooksyncinfodialog2 test_open_notebook_dialog2 test_updatecontroller || exit /b 1
@@ -198,6 +199,8 @@ jobs:
           if (-not $registered) {
             throw "test_pdfviewercore_js not registered; Qt6::Qml (qtdeclarative) missing"
           }
+          python "$env:GITHUB_WORKSPACE/scripts/e2e/smoke_http_api.py" --check-registration .
+          if ($LASTEXITCODE -ne 0) { throw "HTTP API tests are not fully registered" }
         working-directory: ${{runner.workspace}}/build
 
       - name: Build and Run Tests
@@ -219,7 +222,7 @@ jobs:
           exit /b %TEST_RESULT%
         working-directory: ${{runner.workspace}}/build
 
-      - name: Preserve native Typst and theme test reports
+      - name: Preserve native Typst, theme and API test reports
         if: always() && (steps.tests.outcome == 'success' || steps.tests.outcome == 'failure')
         uses: actions/upload-artifact@v4
         with:
@@ -228,6 +231,8 @@ jobs:
             ${{runner.workspace}}/build/tests/widgets/test_typstviewwindow_*.xml
             ${{runner.workspace}}/build/tests/gui/test_themeservice.txt
             ${{runner.workspace}}/build/tests/gui/test_themeservice.xml
+            ${{runner.workspace}}/build/tests/api/test_httpapilifecycle.txt
+            ${{runner.workspace}}/build/tests/api/test_httpapilifecycle.xml
             ${{runner.workspace}}/build/Testing/Temporary/Last*.log
             ${{runner.workspace}}/build/libs/vtextedit/Testing/Temporary/Last*.log
           if-no-files-found: warn
@@ -235,7 +240,7 @@ jobs:
       - name: Re-run failed tests with extra-verbose output (debug aid)
         # On failure of the previous step, re-run only the failing tests with
         # --extra-verbose so Qt Test's PASS/FAIL lines + assertion details
-        # land in the CI log; first-run Typst and theme reports are preserved above.
+        # land in the CI log; first-run Typst, theme and API reports are preserved above.
         # This step never gates the workflow; each suite needs its own failure history.
         if: failure() && steps.tests.outcome == 'failure'
         shell: cmd

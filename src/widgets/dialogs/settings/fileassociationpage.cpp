@@ -1,7 +1,5 @@
 #include "fileassociationpage.h"
 
-#include <QHBoxLayout>
-#include <QLabel>
 #include <QPushButton>
 #include <QVBoxLayout>
 
@@ -10,6 +8,7 @@
 #include <core/services/filetypecoreservice.h>
 #include <core/sessionconfig.h>
 #include <widgets/lineedit.h>
+#include <widgets/propertydefs.h>
 #include <widgets/widgetsfactory.h>
 
 #include "settingspagehelper.h"
@@ -220,14 +219,15 @@ void FileAssociationPage::loadExternalProgramsGroup() {
 
   // Fill the action row with the same themed background as the program rows.
   auto *buttonRow = new QWidget(m_externalCardLayout->parentWidget());
+  buttonRow->setProperty(PropertyDefs::c_settingsContainer, true);
   auto *buttonLayout = new QVBoxLayout(buttonRow);
-  buttonLayout->setContentsMargins(0, 0, 0, 0);
+  buttonLayout->setContentsMargins(16, 6, 16, 6);
   m_addProgramButton = new QPushButton(tr("Add Program"), buttonRow);
   connect(m_addProgramButton, &QPushButton::clicked, this, [this]() {
     addExternalProgramRow(QString(), QString(), QString());
     pageIsChanged();
   });
-  buttonLayout->addWidget(m_addProgramButton, 0, Qt::AlignRight);
+  buttonLayout->addWidget(m_addProgramButton, 0, Qt::AlignLeading);
   m_externalCardLayout->addWidget(buttonRow);
 
   // System program row — always last, before the Add button.
@@ -242,10 +242,12 @@ void FileAssociationPage::loadExternalProgramsGroup() {
 void FileAssociationPage::addExternalProgramRow(const QString &p_name, const QString &p_command,
                                                 const QString &p_suffixes) {
   auto *rowWidget = new QWidget(m_externalCardLayout->parentWidget());
+  rowWidget->setProperty(PropertyDefs::c_settingsContainer, true);
   rowWidget->setProperty("programRow", true);
 
-  auto *rowLayout = new QHBoxLayout(rowWidget);
+  auto *rowLayout = new QVBoxLayout(rowWidget);
   rowLayout->setContentsMargins(0, 0, 0, 0);
+  rowLayout->setSpacing(0);
 
   auto *nameEdit = WidgetsFactory::createLineEdit(rowWidget);
   nameEdit->setObjectName(QStringLiteral("nameEdit"));
@@ -274,10 +276,18 @@ void FileAssociationPage::addExternalProgramRow(const QString &p_name, const QSt
   connect(removeBtn, &QPushButton::clicked, this,
           [this, rowWidget]() { removeExternalProgramRow(rowWidget); });
 
-  rowLayout->addWidget(nameEdit, 2);
-  rowLayout->addWidget(commandEdit, 3);
-  rowLayout->addWidget(suffixesEdit, 2);
-  rowLayout->addWidget(removeBtn, 0);
+  rowLayout->addWidget(
+      SettingsPageHelper::createSettingRow(tr("Program name"), QString(), nameEdit, rowWidget));
+  rowLayout->addWidget(
+      SettingsPageHelper::createSettingRow(tr("Command (%1 = file path)"), QString(), commandEdit,
+                                           rowWidget, SettingsPageHelper::RowLayout::FullWidth));
+  rowLayout->addWidget(SettingsPageHelper::createSettingRow(tr("Suffixes separated by ;"),
+                                                            QString(), suffixesEdit, rowWidget));
+
+  auto *removeLayout = new QVBoxLayout();
+  removeLayout->setContentsMargins(16, 6, 16, 6);
+  removeLayout->addWidget(removeBtn, 0, Qt::AlignLeading);
+  rowLayout->addLayout(removeLayout);
 
   // Insert before the Add Program action row if it exists.
   int insertIndex = m_externalCardLayout->count();
@@ -294,25 +304,18 @@ void FileAssociationPage::removeExternalProgramRow(QWidget *p_row) {
 }
 
 void FileAssociationPage::addSystemProgramRow(const QString &p_suffixes) {
-  auto *rowWidget = new QWidget(m_externalCardLayout->parentWidget());
-  rowWidget->setProperty("programRow", true);
-  rowWidget->setProperty("systemRow", true);
-
-  auto *rowLayout = new QHBoxLayout(rowWidget);
-  rowLayout->setContentsMargins(0, 0, 0, 0);
-
-  auto *nameLabel = new QLabel(tr("System default app"), rowWidget);
-  nameLabel->setToolTip(tr("Built-in program that opens files with the OS default application"));
-
-  auto *suffixesEdit = WidgetsFactory::createLineEdit(rowWidget);
+  auto *suffixesEdit = WidgetsFactory::createLineEdit(m_externalCardLayout->parentWidget());
   suffixesEdit->setObjectName(QStringLiteral("suffixesEdit"));
   suffixesEdit->setPlaceholderText(tr("Suffixes separated by ;"));
   suffixesEdit->setToolTip(tr("File suffixes to open with the system default application"));
   suffixesEdit->setText(p_suffixes);
   connect(suffixesEdit, &QLineEdit::textChanged, this, &FileAssociationPage::pageIsChanged);
 
-  rowLayout->addWidget(nameLabel, 2);
-  rowLayout->addWidget(suffixesEdit, 5);
+  auto *rowWidget = SettingsPageHelper::createSettingRow(
+      tr("System default app"), QString(), suffixesEdit, m_externalCardLayout->parentWidget());
+  rowWidget->setProperty("programRow", true);
+  rowWidget->setProperty("systemRow", true);
+  rowWidget->setToolTip(tr("Operating system will choose the application to open the given file"));
 
   // Insert before the Add Program action row if it exists.
   int insertIndex = m_externalCardLayout->count();

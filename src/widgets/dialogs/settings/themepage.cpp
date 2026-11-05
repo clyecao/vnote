@@ -14,6 +14,7 @@
 #include <gui/utils/themeutils.h>
 #include <utils/widgetutils.h>
 #include <widgets/listwidget.h>
+#include <widgets/propertydefs.h>
 #include <widgets/settingswidget.h>
 
 #include "settingspagehelper.h"
@@ -35,8 +36,10 @@ void ThemePage::setupUI() {
   // Buttons row: Refresh + Open Location.
   {
     auto *buttonWidget = new QWidget(this);
+    buttonWidget->setProperty(PropertyDefs::c_settingsContainer, true);
     auto *buttonLayout = new QHBoxLayout(buttonWidget);
-    buttonLayout->setContentsMargins(0, 0, 0, 0);
+    buttonLayout->setContentsMargins(16, 6, 16, 6);
+    buttonLayout->addStretch();
 
     auto *refreshBtn = new QPushButton(tr("Refresh"), this);
     buttonLayout->addWidget(refreshBtn);
@@ -55,12 +58,12 @@ void ThemePage::setupUI() {
       if (themeService) {
         auto theme = themeService->findTheme(currentTheme());
         if (theme) {
-          WidgetUtils::openUrlByDesktop(QUrl::fromLocalFile(theme->m_folderPath));
+          WidgetUtils::openUrlByDesktop(QUrl::fromLocalFile(theme->m_folderPath),
+                                        m_services.get<ConfigMgr2>(), this);
         }
       }
     });
 
-    buttonLayout->addStretch();
     cardLayout->addWidget(buttonWidget);
   }
 
@@ -187,7 +190,8 @@ void ThemePage::applyThemePreview(const QString &p_themeName) {
     return;
   }
 
-  QScopedPointer<Theme> theme(Theme::fromFolder(info->m_folderPath, ThemeUtils::backfillSystemPalette));
+  QScopedPointer<Theme> theme(
+      Theme::fromFolder(info->m_folderPath, ThemeUtils::backfillSystemPalette));
   if (!theme) {
     return;
   }

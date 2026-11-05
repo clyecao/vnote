@@ -22,7 +22,6 @@ target_sources(vnote PRIVATE
     dialogs/importfolderdialog2.cpp dialogs/importfolderdialog2.h
     dialogs/linkinsertdialog.cpp dialogs/linkinsertdialog.h
     dialogs/managenotebooksdialog2.cpp dialogs/managenotebooksdialog2.h
-    dialogs/marknodedialog2.cpp dialogs/marknodedialog2.h
     dialogs/newfolderdialog2.cpp dialogs/newfolderdialog2.h
     dialogs/newnotebookdialog2.cpp dialogs/newnotebookdialog2.h
     dialogs/newnotedialog2.cpp dialogs/newnotedialog2.h
@@ -43,6 +42,8 @@ target_sources(vnote PRIVATE
     dialogs/settings/imagehostpage.cpp dialogs/settings/imagehostpage.h
     dialogs/settings/markdowneditorpage.cpp dialogs/settings/markdowneditorpage.h
     dialogs/settings/mindmapeditorpage.cpp dialogs/settings/mindmapeditorpage.h
+    dialogs/settings/httpapipage.cpp dialogs/settings/httpapipage.h
+    dialogs/settings/newhttpapitokendialog.cpp dialogs/settings/newhttpapitokendialog.h
     dialogs/settings/newimagehostdialog.cpp dialogs/settings/newimagehostdialog.h
     dialogs/settings/newquickaccessitemdialog.cpp dialogs/settings/newquickaccessitemdialog.h
     dialogs/settings/notemanagementpage.cpp dialogs/settings/notemanagementpage.h
@@ -95,6 +96,7 @@ target_sources(vnote PRIVATE
     fullscreentoggleaction.cpp fullscreentoggleaction.h
     lineedit.cpp lineedit.h
     lineeditwithsnippet.cpp lineeditwithsnippet.h
+    plaintextedit.cpp plaintextedit.h
     imageviewwindow.cpp imageviewwindow.h
     imageviewer.cpp imageviewer.h
     inlinebanner.cpp inlinebanner.h

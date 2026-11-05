@@ -68,7 +68,7 @@ MarkdownViewer::MarkdownViewer(MarkdownViewerAdapter *p_adapter, ServiceLocator 
 MarkdownViewer::MarkdownViewer(MarkdownViewerAdapter *p_adapter, const ViewWindow2 *p_viewWindow2,
                                ServiceLocator &p_services, const QColor &p_background,
                                qreal p_zoomFactor, QWidget *p_parent, QWebEngineProfile *p_profile)
-    : WebViewer(p_background, p_zoomFactor, p_parent,
+    : WebViewer(p_services.get<ConfigMgr2>(), p_background, p_zoomFactor, p_parent,
                 resolveProfile(p_services, p_viewWindow2, p_profile)),
       m_protectedView(p_viewWindow2 && p_viewWindow2->getBuffer().isEncrypted()),
       m_adapter(p_adapter), m_viewWindow2(p_viewWindow2), m_services(p_services) {
@@ -469,6 +469,59 @@ void MarkdownViewer::contextMenuEvent(QContextMenuEvent *p_event) {
       if (actions.contains(copyAct)) {
         setupCrossCopyMenu(menu, copyAct);
       }
+    }
+  }
+
+  if (m_viewWindow2 && m_viewWindow2->getMode() == ViewWindowMode::Read) {
+    const QPointer<QMenu> guardedMenu(menu);
+    const QPointer<QAction> firstStandardAction(actions.isEmpty() ? nullptr : actions[0]);
+    const QPointer<MarkdownViewer> viewer(this);
+    const QPointer<QWebEnginePage> viewerPage(page());
+    const auto generation = m_navigationGeneration;
+    const auto viewerSize = size();
+    const auto zoom = zoomFactor();
+    const auto current = [guardedMenu, viewer, viewerPage, generation, viewerSize, zoom]() {
+      return guardedMenu && viewer && viewerPage && viewer->m_navigationGeneration == generation &&
+             viewer->page() == viewerPage.data() && viewer->isVisible() && viewer->m_viewWindow2 &&
+             viewer->m_viewWindow2->getMode() == ViewWindowMode::Read &&
+             viewer->m_adapter->isReady() && viewer->size() == viewerSize &&
+             !viewerSize.isEmpty() && std::isfinite(zoom) && zoom > 0 &&
+             viewer->zoomFactor() == zoom;
+    };
+    if (current()) {
+      const QPointF position = QPointF(p_event->pos()) / zoom;
+      viewerPage->runJavaScript(
+          QStringLiteral("(() => { const worker = window.vxcore?.getWorker('codeblockactions');"
+                         " return worker?.resolveContextAction(%1, %2) ?? null; })()")
+              .arg(QString::number(position.x(), 'g', 17), QString::number(position.y(), 'g', 17)),
+          [guardedMenu, firstStandardAction, viewer, viewerPage,
+           current](const QVariant &p_result) {
+            if (!current()) {
+              return;
+            }
+            const auto object = QJsonValue::fromVariant(p_result).toObject();
+            const auto idValue = object.value(QStringLiteral("id"));
+            const auto collapsedValue = object.value(QStringLiteral("collapsed"));
+            const auto id = idValue.toDouble();
+            if (!idValue.isDouble() || !std::isfinite(id) || id < 1 || std::floor(id) != id ||
+                !collapsedValue.isBool()) {
+              return;
+            }
+            auto *action = new QAction(collapsedValue.toBool() ? tr("Expand") : tr("Collapse"),
+                                       guardedMenu.data());
+            // The controller has already separated Edit/Export from these standard actions.
+            guardedMenu->insertAction(firstStandardAction.data(), action);
+            guardedMenu->insertSeparator(firstStandardAction.data());
+            connect(action, &QAction::triggered, viewer.data(), [viewerPage, current, id]() {
+              if (current()) {
+                // Dispatch before the menu closes; the worker retains the original DOM target.
+                viewerPage->runJavaScript(
+                    QStringLiteral("window.vxcore?.getWorker('codeblockactions')"
+                                   "?.activateContextAction(%1)")
+                        .arg(QString::number(id, 'f', 0)));
+              }
+            });
+          });
     }
   }
 

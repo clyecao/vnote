@@ -65,6 +65,7 @@
 #include <gui/services/webengineprofileservice.h>
 #include <gui/services/webviewservice.h>
 #include <gui/utils/widgetutils.h>
+#include <integrations/httpapi/httpapicontroller.h>
 #include <qwindow.h>
 #include <utils/autostartutils.h>
 #include <utils/docsutils.h>
@@ -82,7 +83,7 @@
 
 using namespace vnotex;
 
-void loadTranslators(QApplication &p_app, const ConfigMgr2 &configMgr) {
+QString loadTranslators(QApplication &p_app, const ConfigMgr2 &configMgr) {
   auto localeName = configMgr.getCoreConfig().getLocale();
   if (!localeName.isEmpty()) {
     QLocale::setDefault(QLocale(localeName));
@@ -91,11 +92,13 @@ void loadTranslators(QApplication &p_app, const ConfigMgr2 &configMgr) {
   QLocale locale;
   qInfo() << "locale:" << locale.name();
 
+  // Source text is English when no VNote catalog loads.
+  QString uiLocale = QStringLiteral("en_US");
   const auto translationsPath = QDir("app:translations").absolutePath();
   qInfo() << "translations dir: " << translationsPath;
   if (translationsPath.isEmpty()) {
     qWarning() << "failed to locate translations directory";
-    return;
+    return uiLocale;
   }
 
   // For QTextEdit/QTextBrowser and other basic widgets.
@@ -127,6 +130,9 @@ void loadTranslators(QApplication &p_app, const ConfigMgr2 &configMgr) {
 
   std::unique_ptr<QTranslator> vnoteTranslator(new QTranslator(&p_app));
   if (vnoteTranslator->load(locale, "vnote", "_", translationsPath)) {
+    // Qt can skip an untranslated preference (including English) and load a later one.
+    // Bundled documents must follow that catalog, not the regional-format locale.
+    uiLocale = vnoteTranslator->language();
     p_app.installTranslator(vnoteTranslator.release());
   }
 
@@ -139,6 +145,7 @@ void loadTranslators(QApplication &p_app, const ConfigMgr2 &configMgr) {
   if (m3Translator->load(locale, "m3", "_", translationsPath)) {
     p_app.installTranslator(m3Translator.release());
   }
+  return uiLocale;
 }
 
 void setOpenGLOption(const ConfigMgr2 &configMgr) {
@@ -544,6 +551,11 @@ int main(int argc, char *argv[]) {
     QObject::connect(
         &app, &QCoreApplication::aboutToQuit, &app,
         [&serviceLocator]() {
+          // Settle API response waiters before joining HTTP workers or draining
+          // services: no worker may wait for a GUI callback during teardown.
+          if (auto *httpApi = serviceLocator.get<HttpApiController>()) {
+            httpApi->shutdown();
+          }
           auto *svc = serviceLocator.get<vnotex::SyncService>();
           if (svc) {
             svc->shutdown();
@@ -590,11 +602,12 @@ int main(int argc, char *argv[]) {
       app.setApplicationVersion(ConfigMgr2::getApplicationVersion());
     }
 
-    loadTranslators(app, configMgr);
+    const auto uiLocale = loadTranslators(app, configMgr);
 
     CommandLineOptions cmdOptions;
     bool earlyExit = false;
-    switch (cmdOptions.parse(app.arguments())) {
+    const auto parseResult = cmdOptions.parse(app.arguments());
+    switch (parseResult) {
     case CommandLineOptions::Ok:
       break;
 
@@ -779,7 +792,7 @@ int main(int argc, char *argv[]) {
                      "(update check, image hosting) will not work.";
     }
 
-    DocsUtils::setLocale(configMgr.getCoreConfig().getLocaleToUse());
+    DocsUtils::setLocale(uiLocale);
     DocsUtils::addSearchPath(configMgr.getFileFromConfigFolder(QStringLiteral("docs")));
 
     // Push the effective locale into vxcore so its locale-aware, UTF-8 output
@@ -834,8 +847,15 @@ int main(int argc, char *argv[]) {
       qWarning() << "failed to reconcile the Windows startup entry";
     }
 
+    HttpApiController httpApiController(serviceLocator);
+    serviceLocator.registerService<HttpApiController>(&httpApiController);
+
     // Create MainWindow2 with ServiceLocator
     MainWindow2 mainWindow(serviceLocator);
+    if (parseResult == CommandLineOptions::Ok) {
+      QObject::connect(&mainWindow, &MainWindow2::postInitFinished, &httpApiController,
+                       &HttpApiController::applicationReady);
+    }
     // Create NavigationModeService AFTER MainWindow2 (needs top-level widget)
     NavigationModeService navigationModeService(configMgr.getCoreConfig(), &mainWindow);
     serviceLocator.registerService<NavigationModeService>(&navigationModeService);
@@ -905,6 +925,7 @@ int main(int argc, char *argv[]) {
 
     // Run event loop
     ret = app.exec();
+    httpApiController.shutdown();
 
     // The explicit guard.exit() that used to live here is redundant: the guard
     // destructor calls it at scope exit, which is also when the QLocalServer it

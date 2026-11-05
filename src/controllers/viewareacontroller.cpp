@@ -10,19 +10,27 @@
 #include <QFileInfo>
 #include <QFutureWatcher>
 #include <QGuiApplication>
+#include <QJsonArray>
+#include <QJsonDocument>
 #include <QPointer>
+#include <QRandomGenerator>
 #include <QRegularExpression>
 #include <QScopeGuard>
 #include <QScopedValueRollback>
 #include <QSet>
+#include <QStringView>
 #include <QThread>
 #include <QTimer>
 #include <QUrl>
+#include <QUuid>
 #include <QVariantMap>
 #include <QWidget>
 #include <QtConcurrent>
 #include <QtGlobal>
 
+#include <algorithm>
+
+#include <controllers/mindmapviewwindowcontroller.h>
 #include <controllers/workspacewrapper.h>
 #include <core/configmgr2.h>
 #include <core/coreconfig.h>
@@ -48,14 +56,119 @@
 #include <gui/services/viewwindowfactory.h>
 #include <utils/processutils.h>
 #include <widgets/dashboard/dashboardcontent.h>
+#include <widgets/outlineprovider.h>
 #include <widgets/settingswidget.h>
 #include <widgets/viewwindow2.h>
 
+#include <m3/qt/editor.h>
 #include <vxcore/notebook_json_keys.h>
 
 using namespace vnotex;
 
 namespace {
+QByteArray outlineMindMapContent(const QString &p_title, const Outline &p_outline,
+                                 int &p_titleHeadingIndex, QBitArray &p_navigableHeadings,
+                                 QString *p_error) {
+  p_titleHeadingIndex = -1;
+  p_navigableHeadings.fill(false, p_outline.m_headings.size());
+  const auto fail = [p_error](const QString &p_message) {
+    if (p_error) {
+      *p_error = p_message;
+    }
+    return QByteArray();
+  };
+  if (p_title.contains(QChar::Null)) {
+    return fail(ViewAreaController::tr("Unable to create a mind map from this outline"));
+  }
+  struct Node {
+    QString id;
+    QString topic;
+    QVector<qsizetype> children;
+    int level = 0;
+    QString branchColor;
+  };
+  QVector<Node> nodes;
+  QVector<qsizetype> ancestors;
+  nodes.reserve(p_outline.m_headings.size() + 1);
+  ancestors.reserve(p_outline.m_headings.size());
+  nodes.append({QStringLiteral("root"), p_title, {}, 0});
+  qsizetype headingOneCount = 0;
+  for (qsizetype index = 0; index < p_outline.m_headings.size(); ++index) {
+    const auto &heading = p_outline.m_headings[index];
+    if (heading.m_level <= 0 || heading.m_name.contains(QChar::Null)) {
+      return fail(ViewAreaController::tr("Unable to create a mind map from this outline"));
+    }
+    while (!ancestors.isEmpty() && nodes[ancestors.back()].level >= heading.m_level) {
+      ancestors.pop_back();
+    }
+    if (heading.m_isPlaceholder) {
+      continue;
+    }
+    p_navigableHeadings.setBit(index);
+    if (nodes.size() == 1) {
+      p_titleHeadingIndex = int(index);
+    }
+    if (heading.m_level == 1) {
+      ++headingOneCount;
+    }
+    const qsizetype parent = ancestors.isEmpty() ? 0 : ancestors.back();
+    const qsizetype child = nodes.size();
+    nodes[parent].children.append(child);
+    nodes.append({QStringLiteral("h%1").arg(index), heading.m_name, {}, heading.m_level});
+    ancestors.append(child);
+  }
+  if (nodes.size() == 1) {
+    return fail(ViewAreaController::tr("No outline is available for a mind map"));
+  }
+  const bool promoteTitle = headingOneCount == 1 && nodes[1].level == 1;
+  if (promoteTitle) {
+    nodes[0].topic = std::move(nodes[1].topic);
+    auto children = std::move(nodes[1].children);
+    // A synthetic low-level row can have popped the title ancestor. Retain
+    // those later document-root branches after the title's own children.
+    children.reserve(children.size() + nodes[0].children.size() - 1);
+    for (qsizetype index = 1; index < nodes[0].children.size(); ++index) {
+      children.append(nodes[0].children[index]);
+    }
+    nodes[0].children = std::move(children);
+  } else {
+    p_titleHeadingIndex = -1;
+  }
+  auto branchColors = m3::qt::MindMapEditor::automaticBranchColors();
+  auto unusedColors = branchColors.size();
+  for (const auto child : std::as_const(nodes[0].children)) {
+    const auto picked = QRandomGenerator::global()->bounded(
+        int(unusedColors > 0 ? unusedColors : branchColors.size()));
+    nodes[child].branchColor = branchColors[picked];
+    if (unusedColors > 0) {
+      branchColors.swapItemsAt(picked, --unusedColors);
+    }
+  }
+  QJsonArray serialized;
+  for (qsizetype index = 0; index < nodes.size(); ++index) {
+    if (promoteTitle && index == 1) {
+      continue;
+    }
+    const auto &node = nodes[index];
+    QJsonArray children;
+    for (const auto child : node.children) {
+      children.append(nodes[child].id);
+    }
+    QJsonObject record{{QStringLiteral("id"), node.id},
+                       {QStringLiteral("topic"), node.topic},
+                       {QStringLiteral("children"), children}};
+    if (!node.branchColor.isEmpty()) {
+      record.insert(QStringLiteral("style"),
+                    QJsonObject{{QStringLiteral("branchColor"), node.branchColor}});
+    }
+    serialized.append(record);
+  }
+  return QJsonDocument(QJsonObject{{QStringLiteral("schemaVersion"), 1},
+                                   {QStringLiteral("rootId"), QStringLiteral("root")},
+                                   {QStringLiteral("nodes"), serialized}})
+      .toJson(QJsonDocument::Compact);
+}
+
 VxCoreError runEncryptionWorker(const std::function<VxCoreError()> &p_work) {
   QEventLoop loop;
   QFutureWatcher<VxCoreError> watcher;
@@ -762,15 +875,44 @@ bool ViewAreaController::lockAllProtectedNotes(QString *p_error) {
       buffers->isProtectedLocking()) {
     return fail(tr("A protected operation is in progress. Finish it before locking."));
   }
+  for (const auto &entry : m_outlineMindMapPreviews) {
+    if (entry.m_protectedSource && entry.m_admitting) {
+      return fail(tr("A protected operation is in progress. Finish it before locking."));
+    }
+  }
+  const QPointer<ViewAreaController> guard(this);
+  const auto closeProtectedMindMaps = [this, guard] {
+    QSet<ID> sourceIds;
+    for (const auto &entry : m_outlineMindMapPreviews) {
+      if (entry.m_protectedSource) {
+        sourceIds.insert(entry.m_sourceWindowId);
+      }
+    }
+    for (const ID sourceId : sourceIds) {
+      if (!closeOutlineMindMapPreviews(sourceId) || !guard) {
+        return false;
+      }
+    }
+    return true;
+  };
+  if (!closeProtectedMindMaps()) {
+    return fail(tr("Closing a link preview was cancelled."));
+  }
   const QVector<ID> sources =
       m_protectedWindows ? m_protectedWindows->values().toVector() : QVector<ID>();
-  if (!m_view->closePreviewsForSources(sources)) {
+  if (!m_view->closePreviewsForSources(sources) || !guard) {
     return fail(tr("Closing a link preview was cancelled."));
   }
   // The consent loop may start another conversion or lock. Enter the locking
   // state only after consent and recheck exclusion before freezing any editor.
   if (!m_noteConversions.isEmpty() || !buffers->beginProtectedLocking()) {
     return fail(tr("A protected operation is in progress. Finish it before locking."));
+  }
+  // Hooks in first-pass consent may admit another derived snapshot. Locking now
+  // seals new admission; retire that second set before the existing idle barrier.
+  if (!closeProtectedMindMaps()) {
+    buffers->cancelProtectedLocking();
+    return fail(tr("Closing a link preview was cancelled."));
   }
   QVector<ID> windowIds;
   for (const auto &buffer : buffers->protectedBuffers()) {
@@ -801,6 +943,11 @@ bool ViewAreaController::lockAllProtectedNotes(QString *p_error) {
     }
     QCoreApplication::processEvents(QEventLoop::ExcludeUserInputEvents, 20);
     QThread::msleep(1);
+  }
+  for (const auto &entry : m_outlineMindMapPreviews) {
+    if (entry.m_protectedSource) {
+      return cancel(tr("A protected view is still closing. Keys remain available."));
+    }
   }
   // Recollect after retirement: an earlier handle snapshot must not save a
   // discarded preview whose final owner has just been destroyed.
@@ -920,10 +1067,294 @@ ViewAreaController::~ViewAreaController() {
 
 void ViewAreaController::setView(ViewAreaView *p_view) { m_view = p_view; }
 
+bool ViewAreaController::isOutlineMindMapSourceCurrent(const OutlineMindMapPreview &p_preview,
+                                                       bool p_requireVisible) const {
+  auto *buffers = m_services.get<BufferService>();
+  if (!buffers || !m_view || buffers->isProtectedLocking() ||
+      buffers->isContentReplacementActive(p_preview.m_sourceBufferId) ||
+      (p_requireVisible &&
+       !m_view->isPreviewSourceCurrent(p_preview.m_sourceWindowId, p_preview.m_sourceGeneration))) {
+    return false;
+  }
+  const auto source = buffers->getBufferHandle(p_preview.m_sourceBufferId);
+  if (!source.isValid() || source.getBuffer().isEmpty() ||
+      !m_view->findWindowIdsByNode(source.nodeId(), false).contains(p_preview.m_sourceWindowId)) {
+    return false;
+  }
+  for (const auto &conversion : m_noteConversions) {
+    if (conversion->m_nodeId == source.nodeId()) {
+      return false;
+    }
+  }
+  if (p_preview.m_protectedSource) {
+    const auto lease = source.acquireProtectedLease();
+    return source.isEncrypted() && lease && lease->isCurrent();
+  }
+  return !source.isEncrypted();
+}
+
+bool ViewAreaController::activateOutlineMindMapNode(const Buffer2 &p_buffer,
+                                                    const QString &p_nodeId, QString *p_error) {
+  if (p_error) {
+    p_error->clear();
+  }
+  const auto entry = m_outlineMindMapPreviews.constFind(p_buffer.nodeId().relativePath);
+  if (entry == m_outlineMindMapPreviews.constEnd() || entry->m_bufferId != p_buffer.id() ||
+      entry->m_admitting || entry->m_closing || entry->m_windowId == InvalidViewWindowId) {
+    return false;
+  }
+  const auto target = *entry;
+  int headingIndex = -1;
+  if (p_nodeId == QLatin1String("root")) {
+    headingIndex = target.m_titleHeadingIndex;
+  } else if (p_nodeId.startsWith(QLatin1Char('h')) && p_nodeId.size() > 1) {
+    const auto digits = QStringView(p_nodeId).sliced(1);
+    if ((digits.size() > 1 && digits.front() == QLatin1Char('0')) ||
+        std::any_of(digits.begin(), digits.end(), [](QChar p_char) {
+          return p_char < QLatin1Char('0') || p_char > QLatin1Char('9');
+        })) {
+      return false;
+    }
+    bool valid = false;
+    headingIndex = digits.toInt(&valid);
+    if (!valid || headingIndex == target.m_titleHeadingIndex) {
+      return false;
+    }
+  }
+  // A filename root and non-existent/placeholder heading IDs never dismiss the map.
+  if (headingIndex < 0 || headingIndex >= target.m_navigableHeadings.size() ||
+      !target.m_navigableHeadings.testBit(headingIndex)) {
+    return false;
+  }
+  auto *const view = m_view;
+  const QPointer<ViewAreaController> guard(this);
+  if (!view || !p_buffer.isValid() || !isOutlineMindMapSourceCurrent(target) ||
+      view->findWindowIdByBufferId(target.m_workspaceId, target.m_bufferId) != target.m_windowId) {
+    return false;
+  }
+  if (!view->isOutlineHeadingCurrent(target.m_sourceWindowId, target.m_sourceGeneration,
+                                     headingIndex, target.m_outlineFingerprint)) {
+    if (p_error) {
+      *p_error = tr("The outline has changed. Reopen the mind map to navigate.");
+    }
+    return false;
+  }
+  // The overlay host also resolves to this preview workspace; actual tab membership
+  // distinguishes a nested source which must survive the navigation close.
+  const bool nested =
+      view->getViewWindowIdsForWorkspace(target.m_workspaceId).contains(target.m_sourceWindowId);
+  const bool accepted = nested ? closeViewWindow(target.m_windowId, false)
+                               : closePreviewWorkspace(target.m_workspaceId);
+  if (!guard || !accepted || m_view != view || !isOutlineMindMapSourceCurrent(target, false)) {
+    return false;
+  }
+  return view->navigateToOutlineHeading(target.m_sourceWindowId, target.m_sourceGeneration,
+                                        headingIndex, target.m_outlineFingerprint);
+}
+
+bool ViewAreaController::closeOutlineMindMapPreviews(ID p_sourceId) {
+  const QPointer<ViewAreaController> guard(this);
+  QStringList keys;
+  for (auto entry = m_outlineMindMapPreviews.cbegin(); entry != m_outlineMindMapPreviews.cend();
+       ++entry) {
+    if (entry->m_sourceWindowId == p_sourceId) {
+      if (entry->m_admitting) {
+        return false;
+      }
+      keys.append(entry.key());
+    }
+  }
+  for (const auto &key : keys) {
+    if (!m_outlineMindMapPreviews.contains(key)) {
+      continue;
+    }
+    const auto entry = m_outlineMindMapPreviews.value(key);
+    if (entry.m_closing) {
+      continue;
+    }
+    if (entry.m_windowId == InvalidViewWindowId || !closeViewWindow(entry.m_windowId, false) ||
+        !guard) {
+      return false;
+    }
+  }
+  // A consent hook may have admitted another dependency. Never authorize source
+  // retirement while an unaccepted or admitting view remains.
+  for (const auto &entry : m_outlineMindMapPreviews) {
+    if (entry.m_sourceWindowId == p_sourceId && (entry.m_admitting || !entry.m_closing)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+bool ViewAreaController::isOutlineMindMapPreview(const Buffer2 &p_buffer) const {
+  return m_outlineMindMapPreviews.contains(p_buffer.nodeId().relativePath);
+}
+
+bool ViewAreaController::isProtectedOutlineMindMapPreview(const Buffer2 &p_buffer) const {
+  const auto entry = m_outlineMindMapPreviews.constFind(p_buffer.nodeId().relativePath);
+  return entry != m_outlineMindMapPreviews.constEnd() && entry->m_protectedSource;
+}
+
+bool ViewAreaController::isOutlineMindMapRequestCurrent(const Buffer2 &p_buffer,
+                                                        const FileOpenSettings &p_settings) const {
+  const auto entry = m_outlineMindMapPreviews.constFind(p_buffer.nodeId().relativePath);
+  if (entry == m_outlineMindMapPreviews.constEnd()) {
+    return !p_buffer.nodeId().relativePath.startsWith(QLatin1String("vx://outline-mind-map/"));
+  }
+  return !entry->m_closing && entry->m_bufferId == p_buffer.id() &&
+         p_settings.m_previewSourceWindowId == entry->m_sourceWindowId &&
+         p_settings.m_previewSourceGeneration == entry->m_sourceGeneration &&
+         !p_settings.m_detachedView &&
+         (p_settings.m_targetWorkspaceId.isEmpty() ||
+          p_settings.m_targetWorkspaceId == entry->m_workspaceId) &&
+         p_settings.m_mode == ViewWindowMode::Read && p_settings.m_forceMode &&
+         p_settings.m_readOnly && p_settings.m_alwaysNewWindow && p_buffer.isMemoryBacked() &&
+         p_buffer.isReadOnly() && !p_buffer.canSave() && !p_buffer.canReload() &&
+         p_buffer.editorType().compare(QLatin1String("mindmap"), Qt::CaseInsensitive) == 0 &&
+         isOutlineMindMapSourceCurrent(*entry);
+}
+
+bool ViewAreaController::openOutlineMindMapPreview(const Buffer2 &p_sourceBuffer,
+                                                   const Outline &p_outline, ID p_sourceId,
+                                                   quint64 p_sourceGeneration,
+                                                   int p_currentHeadingIndex, QString *p_error) {
+  if (p_error) {
+    p_error->clear();
+  }
+  const auto fail = [p_error](const QString &p_message) {
+    if (p_error) {
+      *p_error = p_message;
+    }
+    return false;
+  };
+  auto *buffers = m_services.get<BufferService>();
+  auto *workspaces = m_services.get<WorkspaceCoreService>();
+  auto *factory = m_services.get<ViewWindowFactory>();
+  OutlineMindMapPreview provenance;
+  provenance.m_sourceWindowId = p_sourceId;
+  provenance.m_sourceGeneration = p_sourceGeneration;
+  provenance.m_sourceBufferId = p_sourceBuffer.id();
+  provenance.m_protectedSource = p_sourceBuffer.isEncrypted();
+  if (!buffers || !workspaces || !factory || !factory->hasCreator(QStringLiteral("MindMap")) ||
+      !isOutlineMindMapSourceCurrent(provenance)) {
+    return fail(tr("Unable to open the outline mind map"));
+  }
+  auto lease = provenance.m_protectedSource ? p_sourceBuffer.acquireProtectedLease()
+                                            : std::shared_ptr<ProtectedBufferLease>();
+  if (provenance.m_protectedSource && (!lease || !lease->isCurrent())) {
+    return fail(tr("Unable to open the outline mind map"));
+  }
+  QString title = p_sourceBuffer.displayName();
+  if (title.isEmpty()) {
+    title = tr("Document");
+  }
+  auto content = outlineMindMapContent(title, p_outline, provenance.m_titleHeadingIndex,
+                                       provenance.m_navigableHeadings, p_error);
+  if (content.isEmpty()) {
+    return false;
+  }
+  provenance.m_outlineFingerprint = p_outline.navigationFingerprint();
+  MemoryBufferSource source;
+  source.address = QStringLiteral("vx://outline-mind-map/%1")
+                       .arg(QUuid::createUuid().toString(QUuid::WithoutBraces));
+  source.displayName = tr("Mind Map: %1").arg(title);
+  source.editorType = QStringLiteral("MindMap");
+  source.content = std::move(content);
+  source.readOnly = true;
+  const QString address = source.address;
+  const QPointer<ViewAreaController> guard(this);
+  m_outlineMindMapPreviews.insert(address, provenance);
+  bool admitted = false;
+  const auto finish = qScopeGuard([guard, address, &admitted, &lease] {
+    // Final failure publication may reenter Lock All. Release this stack's
+    // operation before exposing a non-admitting entry or removing provenance.
+    lease.reset();
+    if (!guard || !guard->m_outlineMindMapPreviews.contains(address)) {
+      return;
+    }
+    guard->m_outlineMindMapPreviews[address].m_admitting = false;
+    const auto entry = guard->m_outlineMindMapPreviews.value(address);
+    if (!admitted) {
+      if (entry.m_windowId != InvalidViewWindowId) {
+        guard->m_outlineMindMapPreviews[address].m_closing = true;
+        guard->rejectPreviewWindow(entry.m_windowId, entry.m_bufferId, entry.m_workspaceId);
+      } else {
+        guard->closeUnownedOpenBuffer(entry.m_bufferId);
+        if (guard) {
+          guard->m_outlineMindMapPreviews.remove(address);
+          guard->removeEmptyPreviewWorkspace(entry.m_workspaceId);
+        }
+      }
+    }
+    if (guard && !admitted) {
+      emit guard->windowsChanged();
+    }
+  });
+  // Publish pending policy before any open hook can attempt promotion.
+  emit windowsChanged();
+  if (!guard || !isOutlineMindMapSourceCurrent(provenance)) {
+    return fail(tr("Unable to open the outline mind map"));
+  }
+  FileOpenSettings settings;
+  settings.m_previewSourceWindowId = p_sourceId;
+  settings.m_previewSourceGeneration = p_sourceGeneration;
+  settings.m_mode = ViewWindowMode::Read;
+  settings.m_forceMode = true;
+  settings.m_readOnly = true;
+  settings.m_focus = true;
+  settings.m_alwaysNewWindow = true;
+  if (p_currentHeadingIndex >= 0 && p_currentHeadingIndex < provenance.m_navigableHeadings.size() &&
+      provenance.m_navigableHeadings.testBit(p_currentHeadingIndex)) {
+    settings.m_anchor = p_currentHeadingIndex == provenance.m_titleHeadingIndex
+                            ? QStringLiteral("root")
+                            : QStringLiteral("h%1").arg(p_currentHeadingIndex);
+  }
+  VxCoreError error = VXCORE_OK;
+  const auto buffer = buffers->openMemoryBuffer(std::move(source), settings, &error);
+  if (!guard) {
+    return fail(tr("Unable to open the outline mind map"));
+  }
+  if (m_outlineMindMapPreviews.contains(address) &&
+      m_outlineMindMapPreviews.value(address).m_bufferId.isEmpty()) {
+    m_outlineMindMapPreviews[address].m_bufferId = buffer.id();
+  }
+  const auto entry = m_outlineMindMapPreviews.value(address);
+  admitted = buffer.isValid() && !buffer.getBuffer().isEmpty() && entry.m_windowId != 0 &&
+             isOutlineMindMapRequestCurrent(buffer, settings) &&
+             isPreviewRequestCurrent(settings, entry.m_workspaceId) &&
+             m_view->findWindowIdByBufferId(entry.m_workspaceId, buffer.id()) == entry.m_windowId &&
+             workspaces->getWorkspace(entry.m_workspaceId)
+                 .value(QStringLiteral("bufferIds"))
+                 .toArray()
+                 .contains(buffer.id());
+  if (!admitted) {
+    return fail(error == VXCORE_OK ? tr("Unable to open the outline mind map")
+                                   : QString::fromUtf8(vxcore_error_message(error)));
+  }
+  return true;
+}
+
 void ViewAreaController::openBuffer(const Buffer2 &p_buffer, const FileOpenSettings &p_settings) {
   const QPointer<ViewAreaController> guard(this);
+  const QString outlineAddress = p_buffer.nodeId().relativePath;
+  if (m_outlineMindMapPreviews.contains(outlineAddress)) {
+    auto &entry = m_outlineMindMapPreviews[outlineAddress];
+    if (!p_settings.m_targetWorkspaceId.isEmpty() || p_settings.m_detachedView ||
+        (!entry.m_bufferId.isEmpty() && entry.m_bufferId != p_buffer.id())) {
+      closeUnownedOpenBuffer(p_buffer.id());
+      return;
+    }
+    entry.m_bufferId = p_buffer.id();
+  }
+  if (!isOutlineMindMapRequestCurrent(p_buffer, p_settings)) {
+    closeUnownedOpenBuffer(p_buffer.id());
+    return;
+  }
   QString fileType;
-  if (p_buffer.isEncrypted()) {
+  if (p_buffer.isMemoryBacked()) {
+    fileType = p_buffer.editorType();
+  } else if (p_buffer.isEncrypted()) {
     const QString editor = p_buffer.editorType();
     if (editor == QLatin1String("markdown")) {
       fileType = QStringLiteral("Markdown");
@@ -951,7 +1382,7 @@ void ViewAreaController::openBuffer(const Buffer2 &p_buffer, const FileOpenSetti
   }
 
   // External program dispatch: check if this file suffix has a configured external program.
-  if (!p_buffer.isEncrypted()) {
+  if (p_buffer.isFileBacked() && !p_buffer.isEncrypted()) {
     const QString suffix = QFileInfo(p_buffer.nodeId().relativePath).suffix().toLower();
     if (!suffix.isEmpty()) {
       auto *configMgr = m_services.get<ConfigMgr2>();
@@ -988,7 +1419,8 @@ void ViewAreaController::openBuffer(const Buffer2 &p_buffer, const FileOpenSetti
   if (!guard) {
     return;
   }
-  if (openVetoed || !p_buffer.isValid() || p_buffer.getBuffer().isEmpty()) {
+  if (openVetoed || !p_buffer.isValid() || p_buffer.getBuffer().isEmpty() ||
+      !isOutlineMindMapRequestCurrent(p_buffer, p_settings)) {
     closeUnownedOpenBuffer(p_buffer.id());
     return;
   }
@@ -1002,7 +1434,7 @@ void ViewAreaController::openBuffer(const Buffer2 &p_buffer, const FileOpenSetti
   // leave an empty DetachedWindow behind for a non-editable file type.
   auto *factory = m_services.get<ViewWindowFactory>();
   if (!factory || !factory->hasCreator(fileType)) {
-    if (p_buffer.isEncrypted()) {
+    if (!p_buffer.isFileBacked() || p_buffer.isEncrypted()) {
       closeUnownedOpenBuffer(p_buffer.id());
       return;
     }
@@ -1038,6 +1470,9 @@ void ViewAreaController::openBuffer(const Buffer2 &p_buffer, const FileOpenSetti
     if (targetWs.isEmpty()) {
       closeUnownedOpenBuffer(p_buffer.id());
       return;
+    }
+    if (m_outlineMindMapPreviews.contains(outlineAddress)) {
+      m_outlineMindMapPreviews[outlineAddress].m_workspaceId = targetWs;
     }
     settings.m_targetWorkspaceId = targetWs;
   } else if (settings.m_detachedView) {
@@ -1083,13 +1518,15 @@ void ViewAreaController::openBuffer(const Buffer2 &p_buffer, const FileOpenSetti
       guard->removeEmptyPreviewWorkspace(targetWs);
     }
   });
-  if (preview && (!isPreviewRequestCurrent(settings, targetWs) || !p_buffer.isValid() ||
-                  p_buffer.getBuffer().isEmpty())) {
+  if (preview && (!(isPreviewRequestCurrent(settings, targetWs) &&
+                    isOutlineMindMapRequestCurrent(p_buffer, settings)) ||
+                  !p_buffer.isValid() || p_buffer.getBuffer().isEmpty())) {
     closeUnownedOpenBuffer(p_buffer.id());
     return;
   }
   const auto activateExistingWindow = [&](ID p_windowId) {
-    if (preview && !isPreviewRequestCurrent(settings, targetWs)) {
+    if (preview && !(isPreviewRequestCurrent(settings, targetWs) &&
+                     isOutlineMindMapRequestCurrent(p_buffer, settings))) {
       closeUnownedOpenBuffer(p_buffer.id());
       return;
     }
@@ -1102,11 +1539,15 @@ void ViewAreaController::openBuffer(const Buffer2 &p_buffer, const FileOpenSetti
           setCurrentViewSplit(targetWs, false);
         }
       }
-      if (!guard || !m_view || (preview && !isPreviewRequestCurrent(settings, targetWs))) {
+      if (!guard || !m_view ||
+          (preview && !(isPreviewRequestCurrent(settings, targetWs) &&
+                        isOutlineMindMapRequestCurrent(p_buffer, settings)))) {
         return;
       }
       m_view->setCurrentBuffer(targetWs, p_buffer.id(), true);
-      if (!guard || !m_view || (preview && !isPreviewRequestCurrent(settings, targetWs))) {
+      if (!guard || !m_view ||
+          (preview && !(isPreviewRequestCurrent(settings, targetWs) &&
+                        isOutlineMindMapRequestCurrent(p_buffer, settings)))) {
         return;
       }
       if (!preview && m_shouldPropagateToCore && wsSvc) {
@@ -1117,7 +1558,8 @@ void ViewAreaController::openBuffer(const Buffer2 &p_buffer, const FileOpenSetti
       }
     }
     if (guard && m_view && m_view->findWindowIdByBufferId(targetWs, p_buffer.id()) == p_windowId &&
-        (!preview || isPreviewRequestCurrent(settings, targetWs))) {
+        (!preview || (isPreviewRequestCurrent(settings, targetWs) &&
+                      isOutlineMindMapRequestCurrent(p_buffer, settings)))) {
       m_view->applyFileOpenSettings(p_windowId, settings);
     }
   };
@@ -1132,7 +1574,8 @@ void ViewAreaController::openBuffer(const Buffer2 &p_buffer, const FileOpenSetti
       return;
     }
     if (!m_view || m_view->findWindowIdByBufferId(targetWs, p_buffer.id()) != existingWindowId ||
-        (preview && !isPreviewRequestCurrent(settings, targetWs))) {
+        (preview && !(isPreviewRequestCurrent(settings, targetWs) &&
+                      isOutlineMindMapRequestCurrent(p_buffer, settings)))) {
       closeUnownedOpenBuffer(p_buffer.id());
       return;
     }
@@ -1157,7 +1600,8 @@ void ViewAreaController::openBuffer(const Buffer2 &p_buffer, const FileOpenSetti
     return;
   }
   const auto openNewWindow = [&]() {
-    if (preview && !isPreviewRequestCurrent(settings, targetWs)) {
+    if (preview && !(isPreviewRequestCurrent(settings, targetWs) &&
+                     isOutlineMindMapRequestCurrent(p_buffer, settings))) {
       closeUnownedOpenBuffer(incomingId);
       return;
     }
@@ -1170,7 +1614,7 @@ void ViewAreaController::openBuffer(const Buffer2 &p_buffer, const FileOpenSetti
     }
   };
   const auto *configMgr = m_services.get<ConfigMgr2>();
-  if (settings.m_alwaysNewWindow || !configMgr ||
+  if (p_buffer.isMemoryBacked() || settings.m_alwaysNewWindow || !configMgr ||
       configMgr->getCoreConfig().getAlwaysOpenNotesInNewTabs() || detached || preview ||
       !settings.m_focus || !m_shouldPropagateToCore || !wsSvc) {
     openNewWindow();
@@ -1540,6 +1984,11 @@ void ViewAreaController::rejectPreviewWindow(ID p_windowId, const QString &p_buf
   }
   // This is failed admission, not a user tab close. Do not let a close hook
   // veto removal of a view that never acquired valid preview ownership.
+  for (auto &entry : m_outlineMindMapPreviews) {
+    if (entry.m_windowId == p_windowId) {
+      entry.m_closing = true;
+    }
+  }
   m_failedPreviewAdmissions.insert(p_windowId, {p_workspaceId, p_bufferId});
   if (!m_view->closeViewWindow(p_windowId, true)) {
     qWarning() << "ViewAreaController: failed to retire rejected preview window:" << p_windowId;
@@ -1704,6 +2153,10 @@ void ViewAreaController::onViewWindowOpened(ID p_windowId, const Buffer2 &p_buff
     return;
   }
 
+  const QString address = p_buffer.nodeId().relativePath;
+  if (m_outlineMindMapPreviews.contains(address)) {
+    m_outlineMindMapPreviews[address].m_windowId = p_windowId;
+  }
   // The view supplies the actual owner: construction or hooks may change the
   // current workspace, but cannot retarget this buffer's registration.
   if (p_buffer.isEncrypted()) {
@@ -1730,7 +2183,8 @@ void ViewAreaController::onViewWindowOpened(ID p_windowId, const Buffer2 &p_buff
     const QPointer<ViewAreaController> guard(this);
     const QString bufferId = p_buffer.id();
     const auto admissionCurrent = [&]() {
-      return m_view && isPreviewRequestCurrent(p_settings, registerWs) && p_buffer.isValid() &&
+      return m_view && isPreviewRequestCurrent(p_settings, registerWs) &&
+             isOutlineMindMapRequestCurrent(p_buffer, p_settings) && p_buffer.isValid() &&
              !p_buffer.getBuffer().isEmpty() &&
              m_view->findWindowIdByBufferId(registerWs, bufferId) == p_windowId;
     };
@@ -1858,6 +2312,21 @@ void ViewAreaController::onViewWindowClosed(ID p_windowId, const QString &p_buff
       if (auto *bufferSvc = m_services.get<BufferService>()) {
         bufferSvc->forgetBufferIfClosed(p_bufferId);
       }
+    }
+  }
+  for (auto entry = m_outlineMindMapPreviews.begin(); entry != m_outlineMindMapPreviews.end();) {
+    if (entry->m_windowId == p_windowId && entry->m_bufferId == p_bufferId) {
+      if (entry->m_admitting) {
+        // An after-open hook can destroy the view before the opening stack
+        // releases its protected lease. Keep that exclusion until its scope exits.
+        entry->m_windowId = InvalidViewWindowId;
+        entry->m_closing = true;
+        ++entry;
+      } else {
+        entry = m_outlineMindMapPreviews.erase(entry);
+      }
+    } else {
+      ++entry;
     }
   }
   if (m_currentWindowId == p_windowId) {
@@ -2053,7 +2522,15 @@ bool ViewAreaController::closeViewWindow(ID p_windowId, bool p_force) {
        m_view->findWindowIdByBufferId(workspaceId, bufferId) != p_windowId)) {
     return false;
   }
-  return m_view->closeViewWindow(p_windowId, p_force);
+  const bool accepted = m_view->closeViewWindow(p_windowId, p_force);
+  if (guard && accepted) {
+    for (auto &entry : m_outlineMindMapPreviews) {
+      if (entry.m_windowId == p_windowId) {
+        entry.m_closing = true;
+      }
+    }
+  }
+  return accepted;
 }
 
 bool ViewAreaController::isPreviewWorkspaceClosing(const QString &p_workspaceId) const {
@@ -2128,6 +2605,21 @@ bool ViewAreaController::closePreviewWorkspace(const QString &p_workspaceId) {
   return true;
 }
 
+bool ViewAreaController::canPromotePreviewBuffer(const Buffer2 &p_buffer) const {
+  return p_buffer.isValid() && !p_buffer.nodeId().relativePath.startsWith(
+                                   MindMapViewWindowController::c_noteAddressPrefix);
+}
+
+bool ViewAreaController::canPromotePreviewWorkspace(const QString &p_workspaceId) const {
+  for (const auto &entry : m_outlineMindMapPreviews) {
+    if (entry.m_workspaceId == p_workspaceId ||
+        (m_view && m_view->previewWorkspaceForWindow(entry.m_sourceWindowId) == p_workspaceId)) {
+      return false;
+    }
+  }
+  return true;
+}
+
 bool ViewAreaController::openPreviewInNewTabs(const QString &p_previewWorkspaceId,
                                               const QString &p_targetWorkspaceId) {
   auto *wsSvc = m_services.get<WorkspaceCoreService>();
@@ -2139,6 +2631,7 @@ bool ViewAreaController::openPreviewInNewTabs(const QString &p_previewWorkspaceI
       p_targetWorkspaceId.isEmpty() || p_previewWorkspaceId == p_targetWorkspaceId || !preview ||
       !preview->isPreview() || !target || target->isPreview() || !target->isVisible() ||
       isPreviewWorkspaceClosing(p_previewWorkspaceId) ||
+      !canPromotePreviewWorkspace(p_previewWorkspaceId) ||
       m_previewAdmissionsInProgress.value(p_previewWorkspaceId) != 0 ||
       !view->isPreviewWorkspaceAvailable(p_previewWorkspaceId)) {
     return false;
@@ -2146,6 +2639,7 @@ bool ViewAreaController::openPreviewInNewTabs(const QString &p_previewWorkspaceI
   const bool detached = m_detachedWorkspaceIds.contains(p_targetWorkspaceId);
   const auto current = [&] {
     return guard && m_view == view && preview && target &&
+           canPromotePreviewWorkspace(p_previewWorkspaceId) &&
            m_workspaces.value(p_previewWorkspaceId) == preview &&
            m_workspaces.value(p_targetWorkspaceId) == target && preview->isPreview() &&
            !target->isPreview() && target->isVisible() &&

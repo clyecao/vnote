@@ -13,6 +13,7 @@
 #include <QPrinter>
 #include <QScopeGuard>
 #include <QSignalBlocker>
+#include <QTimer>
 #include <QToolBar>
 #include <QToolButton>
 
@@ -27,6 +28,7 @@
 #include <core/editorconfig.h>
 #include <core/mindmapeditorconfig.h>
 #include <core/servicelocator.h>
+#include <core/services/bufferservice.h>
 #include <core/sessionconfig.h>
 #include <gui/services/themeservice.h>
 #include <gui/utils/printutils.h>
@@ -75,6 +77,39 @@ QWidget *MindMapViewWindow2::getToolsPanel() {
   return panel.data();
 }
 
+void MindMapViewWindow2::applyFileOpenSettings(const FileOpenSettings &p_settings) {
+  if (!isOutlineMindMapPreview() || p_settings.m_anchor.isEmpty()) {
+    return;
+  }
+  const QPointer<MindMapViewWindow2> guard(this);
+  const auto generation = m_generation;
+  QTimer::singleShot(0, this, [guard, generation, nodeId = p_settings.m_anchor] {
+    const auto current = [&] {
+      if (!guard || generation != guard->m_generation || !guard->isOutlineMindMapPreview() ||
+          !guard->m_contentLoaded || !guard->getBuffer().isValid() || !guard->isVisible() ||
+          !guard->isEnabled() || !guard->m_editor->isVisible() || !guard->m_editor->isEnabled()) {
+        return false;
+      }
+      const auto *buffers = guard->getServices().get<BufferService>();
+      return buffers && !buffers->isProtectedLocking();
+    };
+    if (!current()) {
+      return;
+    }
+    auto *view = guard->m_editor->findChild<QGraphicsView *>();
+    if (!view || view->viewport()->width() <= 4 || view->viewport()->height() <= 4) {
+      return;
+    }
+    // Finish the current camera policy on the laid-out viewport. This consumes
+    // pending initial fit/centering, so a late native callback cannot undo reveal.
+    guard->applyZoom(guard->zoomChoice());
+    if (current()) {
+      // Programmatic selection never emits nodeClicked or navigates the source.
+      guard->m_editor->focusNode(nodeId);
+    }
+  });
+}
+
 void MindMapViewWindow2::setupUI() {
   m_editor = new MindMapEditor(getServices(), getBuffer(), this);
   m_editor->setViewWindow(this);
@@ -93,6 +128,11 @@ void MindMapViewWindow2::setupUI() {
 }
 
 void MindMapViewWindow2::connectEditorSignals() {
+  connect(m_editor, &m3::qt::MindMapEditor::nodeClicked, this, [this](const QString &p_nodeId) {
+    if (isOutlineMindMapPreview()) {
+      emit outlineMindMapNodeRequested(p_nodeId);
+    }
+  });
   connect(m_editor, &m3::qt::MindMapEditor::nodePropertiesPanelAboutToChange, this,
           &ViewWindow2::toolsPanelAboutToChange);
   connect(m_editor, &m3::qt::MindMapEditor::nodePropertiesPanelChanged, this,
@@ -155,10 +195,10 @@ void MindMapViewWindow2::connectEditorSignals() {
             WidgetUtils::addActionShortcutText(
                 action, getServices().get<ConfigMgr2>()->getCoreConfig().getShortcut(
                             CoreConfig::Shortcut::Export));
-            action->setEnabled(m_contentLoaded);
+            action->setEnabled(m_contentLoaded && !isContentProtected());
             const auto generation = m_generation;
             connect(action, &QAction::triggered, this, [this, generation]() {
-              if (generation == m_generation && m_contentLoaded) {
+              if (generation == m_generation && m_contentLoaded && !isContentProtected()) {
                 emit exportRequested();
               }
             });
@@ -540,7 +580,7 @@ void MindMapViewWindow2::syncEditorFromBuffer() {
 }
 
 void MindMapViewWindow2::handlePrint() {
-  if (getBuffer().isEncrypted()) {
+  if (isContentProtected()) {
     showMessage(tr("Printing encrypted notes is not supported"));
     return;
   }
@@ -562,7 +602,7 @@ void MindMapViewWindow2::handlePrint() {
 
 void MindMapViewWindow2::printDocument(const QSharedPointer<QPrinter> &p_printer) {
   if (!p_printer || m_printing || !m_contentLoaded || !isEnabled() || !m_editor->isEnabled() ||
-      !getBuffer().isValid() || getBuffer().isEncrypted()) {
+      !getBuffer().isValid() || isContentProtected()) {
     return;
   }
   if (p_printer->printRange() == QPrinter::PageRange && p_printer->fromPage() > 1) {
@@ -585,7 +625,7 @@ void MindMapViewWindow2::printDocument(const QSharedPointer<QPrinter> &p_printer
     return;
   }
   if (generation != m_generation || !m_contentLoaded || !isEnabled() || !m_editor->isEnabled() ||
-      !getBuffer().isValid() || getBuffer().isEncrypted()) {
+      !getBuffer().isValid() || isContentProtected()) {
     return;
   }
   QPainter painter;
@@ -600,7 +640,7 @@ void MindMapViewWindow2::printDocument(const QSharedPointer<QPrinter> &p_printer
     return;
   }
   if (generation != m_generation || !m_contentLoaded || !isEnabled() || !m_editor->isEnabled() ||
-      !getBuffer().isValid() || getBuffer().isEncrypted()) {
+      !getBuffer().isValid() || isContentProtected()) {
     p_printer->abort();
     return;
   }

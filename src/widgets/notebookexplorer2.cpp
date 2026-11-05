@@ -67,7 +67,6 @@
 #include <core/services/templateservice.h>
 #include <widgets/dialogs/importfolderdialog2.h>
 #include <widgets/dialogs/managenotebooksdialog2.h>
-#include <widgets/dialogs/marknodedialog2.h>
 #include <widgets/dialogs/newfolderdialog2.h>
 #include <widgets/dialogs/newnotebookdialog2.h>
 #include <widgets/dialogs/newnotedialog2.h>
@@ -870,6 +869,13 @@ void NotebookExplorer2::setupTitleBar() {
     connect(btn, &QToolButton::clicked, this, &NotebookExplorer2::importNotebook);
   }
 
+  // Open Folder as Raw Notebook button
+  {
+    auto btn = m_titleBar->addActionButton(QStringLiteral("folder_pen.svg"),
+                                           tr("Open Folder as Raw Notebook"));
+    connect(btn, &QToolButton::clicked, this, &NotebookExplorer2::newNotebookFromFolder);
+  }
+
   // Sync button (T15) — always visible.
   // Enabled state and tooltip are driven by updateSyncButtonState().
   m_syncButton = m_titleBar->addActionButton(QStringLiteral("sync_now.svg"), tr("Sync"));
@@ -883,9 +889,6 @@ void NotebookExplorer2::setupTitleBarMenu() {
   const auto &widgetConfig = m_services.get<ConfigMgr2>()->getWidgetConfig();
 
   m_titleBar->addMenuAction(tr("Manage Notebooks"), m_titleBar, [this]() { manageNotebooks(); });
-
-  m_titleBar->addMenuAction(tr("Open Folder as &Raw Notebook"), m_titleBar,
-                            [this]() { newNotebookFromFolder(); });
 
   m_titleBar->addMenuSeparator();
 
@@ -975,7 +978,8 @@ void NotebookExplorer2::setupRecycleBinMenu() {
     RecycleBinController controller(m_services);
     RecycleBinResult result = controller.prepareRecycleBinPath(m_currentNotebookId);
     if (result.success) {
-      WidgetUtils::openUrlByDesktop(QUrl::fromLocalFile(result.path));
+      WidgetUtils::openUrlByDesktop(QUrl::fromLocalFile(result.path), m_services.get<ConfigMgr2>(),
+                                    this);
     } else {
       MessageBoxHelper::notify(MessageBoxHelper::Information, result.errorMessage, window());
     }
@@ -1234,8 +1238,6 @@ void NotebookExplorer2::setupCombinedMode() {
           &NotebookExplorer2::exportNodeRequested);
   connect(explorer, &CombinedNodeExplorer::shareFolderRequested, this,
           &NotebookExplorer2::onShareFolderRequested);
-  connect(explorer, &CombinedNodeExplorer::markRequested, this,
-          &NotebookExplorer2::onMarkRequested);
   connect(explorer, &CombinedNodeExplorer::encryptNoteRequested, this,
           &NotebookExplorer2::encryptNote);
   connect(explorer, &CombinedNodeExplorer::decryptNoteRequested, this,
@@ -1303,8 +1305,6 @@ void NotebookExplorer2::setupTwoColumnsMode() {
           &NotebookExplorer2::exportNodeRequested);
   connect(explorer, &TwoColumnsNodeExplorer::shareFolderRequested, this,
           &NotebookExplorer2::onShareFolderRequested);
-  connect(explorer, &TwoColumnsNodeExplorer::markRequested, this,
-          &NotebookExplorer2::onMarkRequested);
   connect(explorer, &TwoColumnsNodeExplorer::encryptNoteRequested, this,
           &NotebookExplorer2::encryptNote);
   connect(explorer, &TwoColumnsNodeExplorer::decryptNoteRequested, this,
@@ -2246,27 +2246,6 @@ void NotebookExplorer2::onPropertiesRequested(const NodeIdentifier &p_nodeId) {
   dialog.exec();
 }
 
-void NotebookExplorer2::onMarkRequested(const QList<NodeIdentifier> &p_ids) {
-  if (p_ids.isEmpty() || !m_nodeExplorer) {
-    return;
-  }
-
-  NodeInfo seedInfo = m_nodeExplorer->getNodeInfo(p_ids.first());
-
-  MarkNodeDialog2 dialog(seedInfo.textColor, seedInfo.backgroundColor, window());
-  if (dialog.exec() != QDialog::Accepted) {
-    return;
-  }
-
-  const QString textColor = dialog.textColor();
-  const QString backgroundColor = dialog.backgroundColor();
-  for (const auto &id : p_ids) {
-    if (id.isValid()) {
-      m_nodeExplorer->handleMarkResult(id, textColor, backgroundColor);
-    }
-  }
-}
-
 void NotebookExplorer2::onIgnoreRequested(const NodeIdentifier &p_nodeId) {
   if (!p_nodeId.isValid()) {
     return;
@@ -2470,7 +2449,8 @@ void NotebookExplorer2::onShareFolderRequested(const NodeIdentifier &p_nodeId) {
                 .arg(QDir::toNativeSeparators(result.m_bundlePath)),
             QString(), this) == QMessageBox::Yes) {
       WidgetUtils::openUrlByDesktop(
-          QUrl::fromLocalFile(QFileInfo(result.m_bundlePath).absolutePath()));
+          QUrl::fromLocalFile(QFileInfo(result.m_bundlePath).absolutePath()),
+          m_services.get<ConfigMgr2>(), this);
     }
     break;
 

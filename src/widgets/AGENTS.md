@@ -52,6 +52,37 @@ Hidden overflow buttons keep Qt placement, as do non-editor popups using the
 `Native` default (including Notifications). Ordinary `QMenu`s remain Qt-managed.
 Gate: `tests/widgets/test_buttonpopup.cpp`.
 
+On Windows and macOS, `ButtonPopup` uses a frameless, non-modal Tool panel so native
+IME composition targets its focused input rather than the editor behind it. Keep
+ordinary menus and Linux popup policy unchanged. Do not replace native focus with
+key/input-method forwarding or application modality. Deferred activation and focus
+restoration belong to one guarded opening; capture the origin before subclass
+`aboutToShow` callbacks and retain it across an overflow handoff. Tool panels set
+`Qt::WA_ShowWithoutActivating`: implicit native keying during show can dismiss the
+causing overflow menu before Qt finishes its submenu bookkeeping. Post handoff/activation
+only after base `setVisible()` returns, not from `showEvent()`. Explicit `requestActivate()`
+then establishes the input-method target.
+
+An overflow submenu must release its ancestor popup grabs after Qt's opening stack
+unwinds, then reopen at the same anchor without changing QObject ownership. Accept
+no input during that handoff; cancellation must not strand an input-gated panel.
+Keep `aboutToHide` as the existing save boundary. Outside presses and their releases
+are consumed, including native content windows without QWidget peers. Owned menus
+and dialogs remain interactive; window focus loss alone never dismisses a panel.
+Observe composition events, not virtual-keyboard visibility, when deferring
+application-deactivation dismissal. An owned dialog's completed `finished` signal restores
+panel activation through a single-shot queued, opening-generation-guarded callback. Reopened
+or reparented dialogs and newer modal/popup windows veto it; a hidden finished dialog is not
+a foreign active window. Do not restore synchronously inside native dialog hiding or reopen
+the panel just to recover focus.
+
+Use `ButtonPopup::activePopupWidget()` for application popup guards: native Qt
+popups take precedence, followed by a visible focused/active ButtonPopup panel.
+An owned active panel also keeps its presentation toolbar logically active. Native
+regressions cover IME target/content isolation, overflow, cancellation, dismissal,
+fullscreen Escape and toolbar opacity; physical IME candidate selection still
+requires native platform verification.
+
 ## Hiding the QToolButton Menu Indicator
 Status-bar / toolbar `QToolButton`s that open an `InstantPopup` menu
 (e.g. the status bar "Spelling" menu, the `EncodingButton`, the main toolbar
@@ -73,6 +104,25 @@ text-only status-bar look.
 
 ## Widget Families
 
+### Plain text input
+
+Use `PlainTextEdit` for editable multiline fields; `WidgetsFactory::createPlainTextEdit()`
+returns it through the existing `QPlainTextEdit *` interface. Direct construction preserves
+ordinary Qt styling; the factory retains its `ConsoleTextEdit` styling property.
+
+- `Ctrl+W` deletes the previous Qt word; `Ctrl+U` deletes back to the logical line's start,
+  not the start of a wrapped visual row. At the logical line's start, `Ctrl+U` does nothing.
+- Either shortcut deletes an existing selection first, including a multiline selection.
+- Each deletion is one undo step. Only an unmodified physical Control chord is accepted
+  (Qt's Meta modifier on macOS); Shift/Alt combinations and other keys retain Qt behavior.
+- Editable fields claim these shortcuts before parent actions. Read-only fields neither
+  claim them nor change text. Read-only consoles continue to use `QPlainTextEdit` directly.
+
+Boundary, selection, undo, wrapping, and parent-shortcut coverage: `test_plaintextedit`.
+
+`MindMapEditor::createNoteEditor()` returns `PlainTextEdit` for m3's node-properties Note
+field, in both embedded and separated panels. Inline topic editors remain unchanged.
+`test_mindmapeditor::noteEditorShortcuts` covers deferred initialization, policy and persistence.
 ### MainWindow
 
 - `MainWindow2` — new main window shell with ServiceLocator DI; owns the top-level layout, toolbar, sidebar, and view area
@@ -113,7 +163,19 @@ The split-pane editor area, designed around vxcore workspaces:
 
 - `ViewArea2` — QSplitter tree managing split panes (pure view, no business logic)
 - `ViewSplit2` — QTabWidget-based split pane; each instance maps 1:1 to a vxcore workspace
-- `ViewWindow2` — abstract base for file viewer windows; receives an initial `Buffer2` and owns guarded same-type rebinding
+- `ViewWindow2` — abstract base for document viewer windows; receives an initial `Buffer2` and owns guarded same-type rebinding
+
+Full Text, Markdown, Typst, MindMap, PDF and Image windows also accept memory documents.
+Use `Buffer2::displayName()`, explicit memory `editorType()`, and `canSave()` / `canReload()`;
+`resolvedPath()` is empty without a backing file. File menus, external programs, attachments
+and sidecar comments require file capabilities, not a suffix in a `vx://` identity. PDF memory
+documents register owned bytes with the existing revocable `vxpdf://` token registry.
+Relative resources require an explicit validated base; empty never means the current directory.
+Rootless Typst compiles its overlay in memory-only project mode, using a normalized project-relative
+`displayName` as its source identity or `main.typ` for an arbitrary title. Rootless Markdown keeps a
+local renderer-shell origin for bundled scripts but an `about:blank` document base, so content
+cannot resolve relative images against the template directory. See the
+[memory-buffer service contract](../core/services/AGENTS.md#memory-document-buffers).
 
 Markdown Edit-to-Read transitions must adopt the revision from their successful `syncNow()`
 before exposing/focusing the reader. A delayed native focus gain otherwise misclassifies that
@@ -125,25 +187,51 @@ enabled state before sending a request. A genuinely hidden view must not start p
 shown later; Close, Escape and disabling still cancel immediately. Preparation may pump events,
 so its state restoration must be guarded by the view's lifetime.
 
-`ViewWindow2` mounts both `StatusBar` and shared `StatusWidget` through `StatusOverlay`,
-not through the bottom layout. Each strip floats over the bottom edge of its own content
-layout, above Find and other bottom widgets; showing, clearing or expiring a message must
-not resize the editor/WebEngine viewport. Persistent editor controls also float: the strip
-covers content rather than reserving a row. Geometry follows layout, resize and theme/font
-changes, including detached and fullscreen hosts; shared widgets reparented away are no
-longer positioned by their previous attachment.
+Warm Markdown tab activation restores the ready reader page's visibility before QWidget
+show recursion reaches its rendering children. `QWebEngineView::showEvent()` is too late:
+Qt Quick can otherwise paint the still-hidden WebEngine item first. Only an intended-visible,
+ready reader under a visible parent is eligible; showing a child under a hidden ancestor must
+not wake its page. Keep ordinary hide and inactivity-unload behavior unchanged, and guard
+window lifetime across the synchronous page visibility notification.
+
+`ViewWindow2` mounts both `StatusBar` and shared `StatusWidget` through `StatusOverlay`.
+Permanent controls reserve the first row of the bottom layout: content, status, other bottom
+widgets, then Find. Temporary-only messages float over the bottom edge of the content instead.
+Replacing permanent controls with a message keeps the reserved row; showing, clearing or
+expiring a message must not resize the editor/WebEngine viewport. Explicitly hiding fixed
+status releases its row. Ancestor visibility does not change its attachment mode.
+
+Fixed geometry belongs to the bottom layout, with an ignored horizontal size policy to avoid
+column/URL width pressure and fixed vertical policy using the styled stacked size hint. Do not
+set a fixed height or reset maximum height in the attachment: Typst owns its Read-mode cap.
+`StatusWidget::hasPermanentStatus()` depends on installed editor/corner controls, never the
+current message page; `permanentStatusChanged` updates attachment before showing new controls.
+Geometry follows layout, resize and theme/font changes, including detached and fullscreen
+hosts; shared widgets reparented away are no longer positioned or reclaimed by old attachments.
 
 Message-only surfaces pass mouse input through; editor and corner controls remain interactive.
 Windows overlays need native stacking above late-created WebEngine children and input
-transparency on both QWidget and its native window, preserved across hide/show. Keep the
+transparency on both QWidget and its native window, preserved across hide/show. Set
+`WA_DontCreateNativeAncestors` before `WA_NativeWindow` on the overlay: making the tab
+containers native exposes stale tab backing surfaces during rapid reader switches. The
+overlay must stay inside its content bounds and must not intercept sibling panes. Keep the
 background theme-painted and URLs plain text. Every bundled `interface.qss` gives both
 status surfaces a 6px radius, palette-based border/fill, and padded messages; internal stack
 pages stay transparent without overriding the nested editor chips or corner controls.
 Windows derives the native mask from the QSS-painted surface, cached until size/style changes,
-so changing the QSS radius does not require a matching C++ value. Activate the content layout
-before sampling its geometry; an invalidated layout can temporarily report an empty rectangle.
-Markdown Read hides an empty overlay; Edit retains its status controls. Regression coverage:
-`test_statusbar` and `test_statuswidget`.
+so changing the QSS radius does not require a matching C++ value. Activate the owning layout
+before sampling content geometry; an invalidated layout can temporarily report an empty rectangle.
+Markdown and Typst Read release the fixed row and only overlay messages; Edit reserves the
+status row. Attachment changes only at mode transitions, not in message-visibility callbacks.
+Plain text always reserves its controls; message-only MindMap status remains an overlay.
+Regression coverage: `test_statusbar`, `test_statuswidget`, `test_markdownviewwindow_lazy`,
+and `test_typstviewwindow_insertion`.
+
+`LinkPreviewOverlay` uses the same native-child-only ancestry policy, but keeps normal hit
+testing. Its QWidget parent remains the source view; its native parent may be the containing
+main or detached window. Rebinding a preview must not promote the source/tab stack or steal
+focus from the remaining preview. `test_viewarea_tab_reuse` covers warm reader switching and
+preview promotion/rollback with native geometry, hit testing and keyboard ownership.
 
 #### Link preview dismissal
 
@@ -163,6 +251,77 @@ script/data actions retain their behavior. Local file URLs are converted to path
 entering the existing link policy; same-document anchors scroll in place. Chromium emits
 `loadStarted` even for rejected link navigation, so allowing that navigation would retire the
 still-visible source bridge and break subsequent links. Genuine reload invalidation is unchanged.
+
+#### Outline mind-map snapshots
+
+Markdown, PDF and Typst expose **Mind Map** (Lucide Brain, `brain_editor.svg`) immediately
+before **Outline**. The clicked
+window's published `OutlineProvider` supplies a read-only native map, without saving,
+reparsing or changing source mode. Each activation captures fresh memory content; open maps
+never follow later edits. When the first real outline heading is the only H1, its literal
+name becomes the central topic without a duplicate heading node; its children become root
+branches. Otherwise the document name remains central. This uses outline order, not the
+position of preceding prose. A title-only outline produces a single central node. Other
+heading IDs and the document-based preview tab name remain unchanged. Synthetic placeholders
+are omitted; real empty/numbered/Unicode names remain literal. Missing/invalid outlines never
+open blank maps.
+
+Opening captures the clicked provider's current heading index with the outline, before open
+hooks can change selection. A valid real index selects its `h<original-index>` node, or `root`
+for the promoted title; missing/out-of-range/placeholder selections retain the central node.
+Providers that report no current item (currently PDF) use that fallback rather than inferring
+one from page position. `FileOpenSettings::m_anchor` carries the initial node ID only for this
+generated-preview path; ordinary mind-map file anchors remain unchanged.
+
+`MindMapViewWindow2::applyFileOpenSettings()` applies this one-shot focus after show/layout,
+using the current zoom/fit policy and native `focusNode()`. It reveals collapsed ancestors,
+centers the node and focuses the canvas; centering survives subsequent host/Tools-dock resizing.
+Generation, visibility, enabled/content and protected-locking guards cancel stale queued work.
+Initial focus does not emit `nodeClicked`, close the preview, change source position or mutate
+snapshot JSON. Later source selection changes do not retarget the open snapshot.
+
+Real document-root children receive automatic colors from m3's public branch palette before
+loading the read-only snapshot. Colors are distinct until the palette is exhausted; descendants
+inherit their branch's color and the document root stays neutral. The snapshot retains these
+colors through navigation and theme switches. Ordinary map files and their preferences are unchanged.
+
+A completed plain primary click on a node body/topic navigates to its original source heading.
+The promoted title maps to its original H1; a document-name-only root has no destination.
+Ctrl/Shift selection, keyboard/API selection, folding, dragging and other controls do not navigate.
+The controller closes the source's preview through existing save/cancel consent before revealing
+that exact source window. If the source is itself a tab in the preview, only the generated map
+closes and unrelated tabs survive. Whole-preview closure remains sequential/nontransactional;
+a later veto prevents the jump but does not restore already-closed tabs.
+
+Navigation retains each provider's normal Outline behavior: Markdown uses its current mode,
+PDF follows its bookmark destination, and Typst reveals the source heading (Read enters Edit).
+The roster stores original navigable-index bits, promoted-title index and an ordered heading
+fingerprint, never another plaintext outline. `Outline::navigationFingerprint()` covers names,
+levels and placeholders, not display/reordering permissions. Validate it before consent and
+again after source focus; changed headings require reopening the snapshot. Body-only edits use
+the current heading positions. Recheck source ID/generation/protection across callbacks, and
+retain no source outline or protected operation lease across consent. Ordinary file mind maps
+do not navigate other source windows. Coverage includes real bookmarked PDF/Typst destinations,
+protected/nested sources and cancellation/stale-source races in `test_viewarea_tab_reuse`.
+
+`ViewAreaController` admits generated `vx://outline-mind-map/` buffers only with their exact
+source window/generation. Its metadata-only provenance roster survives until native view
+destruction and membership release. Every full document view closes its generated dependents
+through normal consent before close, replacement or conversion, including sources nested in an
+existing preview. A live nested source remains current when selecting its map hides that tab;
+hidden ordinary sources and unavailable preview hosts still reject admission.
+
+Generated snapshots use existing source-bound preview workspaces, never detached/main tabs or
+session persistence. Any generated entry, including pending admission or retirement, disables
+**Open in New Tab** for the entire mixed preview. The existing per-tab node-note promotion
+policy remains an additional gate; closing the last generated map restores ordinary promotion.
+
+Unlocked encrypted sources require a current lease during admission. Derived memory is not
+classified as an encrypted file: `ViewWindow2::isContentProtected()` covers its Print/Export
+policy and deferred destruction. Lock All rejects reentrant protected admission, closes
+protected dependencies before consent and again after locking seals admission, then drains
+native destruction before locking keys. Close vetoes keep sources available. Clipboard policy
+is unchanged. Coverage: `test_viewarea_tab_reuse::outlineMindMap*`.
 
 #### Note tab reuse
 
@@ -620,7 +779,7 @@ secondary actions in a three-dot **Menu** (`menu.svg`):
 | Position | What |
 |---|---|
 | spacer | |
-| `addAdditionalRightToolBarActions()` | Markdown and Typst: Outline; PDF: sidebar, Outline, Find And Replace, Presentation Mode, page and zoom controls |
+| `addAdditionalRightToolBarActions()` | Markdown and Typst: Mind Map, Outline; PDF: sidebar, Mind Map, Outline, Find And Replace, Presentation Mode, page and zoom controls |
 | Find And Replace | Default position; PDF opts out because Find is beside Outline |
 | `addAdditionalViewToolBarActions()` | Text and Markdown: Presentation Mode; Typst: Presentation Mode, page and zoom controls; Mind Map: Presentation Mode, Layout, then zoom controls |
 | Menu | Readable Width and Print, when `isPrintSupported()` |
@@ -645,11 +804,11 @@ its editor is lazily created. History signals, mode changes and status changes r
 connections use the editor as their context so protected-editor teardown disconnects them.
 
 Text keeps **Find And Replace → Presentation Mode → Menu**. Markdown keeps
-**Outline → Find And Replace → Presentation Mode → Menu**. PDF keeps
-**Outline → Find And Replace → Presentation Mode** together before page/zoom controls.
+**Mind Map → Outline → Find And Replace → Presentation Mode → Menu**. PDF keeps
+**Mind Map → Outline → Find And Replace → Presentation Mode** together before page/zoom controls.
 Mind Map adds Lucide Undo and Redo after the left common actions and keeps
 Outline → Find And Replace → Presentation Mode → Layout → Zoom Out → percentage combo → Zoom In → Menu.
-Typst keeps Outline → Find And Replace → Presentation Mode → page navigation →
+Typst keeps Mind Map → Outline → Find And Replace → Presentation Mode → page navigation →
 Zoom Out → percentage combo → Zoom In → Menu on the right of the common spacer, matching PDF.
 
 `ZoomToolBar` owns the shared Typst/mind-map controls: Fit Width, Fit Page, 100%, 125%,
@@ -1186,6 +1345,10 @@ Three surfaces, one rule each:
 - `NotificationButton2` (`QToolButton`) lives on the settings toolbar immediately after the Settings menu. It paints a red badge with `NotificationService::activeCount()` and refreshes its bell icon on `ThemeService::themeChanged`. It **does not auto-show the popup** — `showPopup()` is called on click, or by `MainWindow2` forwarding `NotificationToast::popupRequested`.
 - `NotificationPopup2` (extends `ButtonPopup`) is the click-to-open **notification centre**: messages newest-first with severity icon + title + text + optional collapsible "Details" + optional progress bar + per-message action buttons + Dismiss, in a height-capped `QScrollArea`, under the shared `TitleBar` holding "Notifications" and Clear All. Do NOT hand-roll a titlebar.
 
+Popup and toast action buttons form a full-width vertical stack in producer order, with 4px
+spacing. The popup's generic Dismiss, when needed, stays last. Do not add a leading stretch
+to the action layouts; narrow notifications must not squeeze several buttons into one row.
+
 Toast sizing chooses the width within the anchor first, then uses the polished layout's
 `totalHeightForWidth()` so wrapped text and styled action buttons keep their full height.
 Visible toasts remeasure after `LayoutRequest` (including font/theme changes); retired actions
@@ -1373,7 +1536,7 @@ muted color from the system palette at runtime.) When adding a theme, add
 What is **not** an offender, and is not flagged:
 
 - A color literal used as **data** rather than chrome — the mark-node swatch
-  palette (`marknodedialog2.cpp`), the notebook avatar colors
+  palette (`../controllers/notebooknodecontroller.cpp`), the notebook avatar colors
   (`notebookselector2.cpp`), and `CommentColorSwatch`
   ([`../gui/AGENTS.md § CommentColorSwatch`](../gui/AGENTS.md#commentcolorswatch)),
   which paints the comment-colour chip with `QPainter` and offers colors *to*

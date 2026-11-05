@@ -17,6 +17,9 @@ is set** (it defaults to OFF; CI turns it ON). Registered via
 the `add_qt_test()` helper (details in [Adding New Tests](#adding-new-tests) below). Categories:
 `controllers/`, `core/`, `gui/`, `integration/`, `models/`, `utils/`, `widgets/`.
 
+`VNOTE_BUILD_TESTS` also controls the bundled vtextedit test targets. VNote sets
+`VTEXTEDIT_BUILD_TESTS` from that flag; standalone vtextedit keeps its own default ON.
+
 Configure the test-enabled build dir from repo root (also re-run this if `tests/CMakeLists.txt`
 itself changed): `cmake -B build-debug -DVNOTE_BUILD_TESTS=ON`.
 
@@ -58,6 +61,13 @@ ctest --test-dir libs/vxcore/build_test -C Debug -R "^test_yourthing$" --output-
 - After a CMake version upgrade, stale build dirs fail to reconfigure with errors like `CMakeSystem.cmake.in does not exist`. Delete the offending build dir and re-run the configure command from scratch — do NOT try to repair in place.
 - After modifying a touched module, run the FULL test target for that module (not just your new subtest) to catch regressions; vxcore tests print each subtest name to stdout so you can verify the new one ran.
 
+Child-process readiness is a byte-stream protocol: accumulate stdout until the complete
+marker arrives under one deadline. IPC slow-start fixtures must use blocking reads rather
+than pumping the primary event loop while waiting for that marker.
+
+Notification backlog fixtures must wait for the scroll range to match the complete
+height-for-width layout before scrolling to the bottom. A merely positive range can still
+describe earlier rows while `QScrollArea` has a queued layout update, especially on Cocoa.
 ## Test Structure
 
 ```
@@ -155,10 +165,13 @@ QTEST_GUILESS_MAIN(tests::TestMyService)
 ```
 
 ## Enable Tests
-Uncomment in root `CMakeLists.txt`:
-```cmake
-add_subdirectory(tests)
+Enable parent and bundled editor tests explicitly at configure time; do not edit CMake files:
+```bash
+cmake -S . -B build -DVNOTE_BUILD_TESTS=ON
 ```
+
+CMake retains cached choices. An existing ON build stays ON even though the default is OFF;
+configure with `-DVNOTE_BUILD_TESTS=OFF` to remove both sets of test targets from that build.
 
 ## Build Tests
 ```bash
@@ -207,16 +220,18 @@ Keep the dismissal timer active until completion and restrict it to the tested d
 message box. Do not stop on the first click or infer dialog readiness from
 `QThread::loopLevel()`.
 
-`resourceRemoteConsent` owns a parent-matched `QPointer<QMessageBox>` and an answer timer
-through queued Open Link dispatch and destruction of its completed message box, not just
-until the context menu returns. A Cocoa native alert's QWidget is a hidden
+`ConsentDialogDriver` shares the native resource/preview consent fixture. It owns a
+parent-matched `QPointer<QMessageBox>` and an answer timer through dispatch and destruction
+of the completed message box, not just until the context menu or click returns. A Cocoa native alert's QWidget is a hidden
 mirror (`WA_DontShowOnScreen`), not its interactive surface: click the real NSButton's
-Yes/No tag on the active native alert, or the parent's attached sheet for WindowModal.
+Yes/No/YesToAll tag on the active native alert, or the parent's attached sheet for WindowModal.
 Never re-show or click that dummy QWidget during native modal startup. The QWidget fallback
 requires the matching visible active modal and its visible expected button. Cocoa uses
 an `NSTimer` in common/modal/tracking run-loop modes: a native alert nested inside manual
 Qt event dispatch can suppress QTimer activation. Invalidate before answering and on scope
-exit; the same native timer owns the eight-second failure/reject deadline.
+exit; the same original eight-second deadline covers readiness and completion. Native Escape
+uses the alert's key-equivalent path; Close uses `QMessageBox::close()` to end its native
+modal helper as well. Neither may be replaced with a No-button click.
 
 **Native WebEngine raster tests:** on macOS, `test_mindmapexport`, `test_htmlpdfexporter`,
 `test_markdownwebjobs` and `test_webviewservice` use `cocoa` and the matching Qt kit's
@@ -261,18 +276,66 @@ Do not mix Qt's cached global frame origin into native input or compensate with 
 Typst shortcut/focus tests use xcb under Xvfb on Linux, not offscreen. Keep the normal
 QtTest crash handler. Build the host Typst module's `test_typstviewwindow_insertion` executable
 once, then select `^test_typstviewwindow_(insertion|cleanup|resources)$` in CTest. These serial
-groups share the executable and each retain a 240-second deadline. With `VNOTE_TYPST_TEST_GROUP`
-unset, a direct executable launch still runs every case. Each group writes plaintext stdout and
+groups share the executable and each retain a 240-second deadline. On macOS, CTest runs
+only cleanup and resources; the insertion group is disabled (see below). With
+`VNOTE_TYPST_TEST_GROUP` unset, a direct executable launch still runs all default-enabled
+cases. Each group writes plaintext stdout and
 its own `test_typstviewwindow_<group>.xml` JUnit file in the CTest working directory. CI
 preserves original parent/native CTest logs and these reports before diagnostic reruns,
 since hosted stdout can omit assertions.
+
+The controller executable is also partitioned without extending deadlines. Build
+`test_typstviewwindowcontroller` once and run
+`^test_typstviewwindowcontroller(_images|_resources)?$`: the base registration covers
+navigation, followed by image validation/storage and resource acquisition/viewing.
+All three are serial, retain 60-second deadlines and `-nocrashhandler`, and use the
+same native runtime environment. Empty/unset `VNOTE_TYPST_CONTROLLER_TEST_GROUP` runs
+all cases directly; unknown groups fail. Slot boundaries `imageStorage()` and
+`resourceSourceRejection()` keep every test in exactly one group.
+
+The `resourceSnapshotBytes(retained-gif-mime-not-replaced-file)` row is disabled by default.
+Set `VNOTE_TEST_RETAINED_GIF_SNAPSHOT=1` to register it; only the literal `1` enables it.
+The PNG snapshot row and every other resource test remain enabled. Windows Clipboard
+User Service can interfere with the GIF row on a shared desktop; the opt-in does not
+change its assertions or convert failures into skips.
+
+All three parent CI workflows set this flag, including for diagnostic reruns. **Pre-push
+verification must also set it when this suite is affected**; a default local pass is not
+proof of the full CI/pre-push coverage. No build reconfiguration is needed:
+
+```powershell
+$env:VNOTE_TEST_RETAINED_GIF_SNAPSHOT = "1"
+ctest --test-dir build-debug -C Debug -R '^test_typstviewwindow_resources$' --output-on-failure
+```
+
+```bash
+VNOTE_TEST_RETAINED_GIF_SNAPSHOT=1 ctest --test-dir build-debug -R '^test_typstviewwindow_resources$' --output-on-failure
+```
+
 Set Qt's active window explicitly at focus-sensitive fixture operations; `activateWindow()`
 alone depends on a window manager under Xvfb. After dismissing a modal dialog, wait for
 window activation and editor focus before sending shortcuts. Settle native exposure and
 activation before measuring drag coordinates. Before inserting tab-replacement or presentation
 drafts programmatically, wait for editor focus: that registers the active writer used by Save.
+Memory-document fixtures follow the same rule: restore native host activation after reload
+consent before editing a shared split, and wait for Markdown editor focus before inserting a
+scratch draft. Read-mode synchronization pulls that active writer, not an unfocused widget.
 The lazy-view `showWindow()` helper establishes those exposure/activation/focus preconditions;
 do not require editor focus for hidden/disabled editors or encrypted buffers already locking.
+Native popup fixtures must settle the owner's activation before promotion/opening. A
+transient parent shares `QWindow::isActive()`; when exact ownership matters, wait for both
+`QGuiApplication::focusWindow()` and `QApplication::activeWindow()` to match the intended host.
+`activateNativeHost()` observes the target's closest existing native surface, not only the
+root window: fullscreen native children can cover the root's entire exposed region. Retain
+current host/surface ancestry and exact native activation checks, without creating peers or
+forcing the child focus that a test is meant to observe. After modal cancellation, restore
+the fixture's native top-level activation if needed, then observe automatic child-focus
+restoration; never call `setFocus()` to supply the child focus under test. Native dialog
+input similarly waits for `QGuiApplication::focusObject()`, not just QWidget `hasFocus()`.
+Context-menu fixtures wait for both selection and deselection to reach WebEngine before clicking.
+Use an explicit blank non-text region for an unselected context: Cocoa/Chromium can select
+the word under a right-click even after the fixture cleared selection. Keep selected-link,
+image and empty-context reset assertions distinct.
 
 `test_viewarea_tab_reuse` retains only its unmodified, version-stamped bundled asset directories
 between QtTest rows. It removes all local state and all non-bundle app entries before creating
@@ -281,6 +344,16 @@ ConfigMgr2, and prune only in the test class `init()`, never inside `Fixture::in
 intra-row fixture recreation intentionally tests persisted sessions. This suite must not edit
 installed assets, including `web/css/user.css` or user-created templates; asset-customization
 fixtures must retain the full test-directory reset. Keep the existing suite deadlines.
+
+On macOS, CTest marks the entire `test_viewarea_tab_reuse` and
+`test_typstviewwindow_insertion` tests `DISABLED`, including their previously passing rows.
+Both targets still compile. Repeated Cocoa focus/input failures and the tab-reuse SIGBUS
+([example job](https://github.com/vnotex/vnote/actions/runs/41394392636/job/125112492727))
+remain unresolved; this exclusion is not a product fix. Typst cleanup/resources, controller,
+export and native-editor tests remain enabled. Windows/Linux registration is unchanged.
+This CTest-only exclusion does not affect direct executable launches, add `QSKIP`, weaken
+assertions, change deadlines, or relax the separate local Windows whitelist below.
+Re-enable after the failures are fixed and verified on native macOS.
 
 PDF.js text-item boundaries are not word boundaries: ligatures can split a word across
 items. Reconstruct text by concatenating `item.str` and adding a newline only for
@@ -326,8 +399,9 @@ Reassess/remove an entry when its native activation cause is fixed.
 
 The 2026-10-29 investigation observed a visible/in-bounds preview button with an inactive
 native window and null `widgetAt`, while failing rows varied across runs; the unmodified
-full suite subsequently passed all 73 cases. The fixture requests activation without
-waiting for native activation. The original reader-click rejection and editor-focus
+full suite subsequently passed all 73 cases. That earlier fixture requested activation
+without waiting for native activation; the current fixture observes its owned native surface.
+The original reader-click rejection and editor-focus
 failure did not identify a covering process or independently prove their native-window
 state, so those assertion messages alone do not qualify for the exception.
 
@@ -369,10 +443,17 @@ instance. **It skips locking and IPC, not data isolation.** Never launch the age
 against the normal profile or real notebooks. Create a fresh portable copy for each run; its
 existing `config/` folder redirects config, session and WebEngine data to that copy.
 
-Before using this recipe, check the OS Documents folder's `my_notebook` path. If it is missing or
-an empty directory, first-run setup can create/open a bundled notebook there, **outside the portable
-copy**; use a disposable OS account instead. Do not edit, empty, or delete the user's directory to
-satisfy the collision guard. Continue testing only the scratch file in the disposable copy.
+Run this fresh-profile recipe in a disposable OS account. First-run setup can create a notebook
+in Documents/`vnote_notebook` or reopen an existing notebook there, **outside the portable copy**.
+A non-empty destination is not an isolation guard: a valid user notebook will be opened.
+Do not edit, empty, rename, or delete the user's directory to avoid that behavior. Continue testing
+only the scratch file in the disposable copy.
+
+Portable mode does not isolate Windows startup registration. Before launching a fixture with a
+loaded Qt session, inspect `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` read-only and
+abort if its `VNote` value exists; use an authorized disposable OS account instead. Never enable
+startup or remove/replace the user's entry to run a smoke. Keep fixture `startOnSystemStartup`
+false and verify the value remains absent after the owned process exits.
 
 Run from the repository root after building `vnote`. Set `$build` to the build you just verified;
 the example derives the matching Qt runtime from its CMake cache, rather than mixing Qt versions.
@@ -435,6 +516,53 @@ Behavior contract: [Agent / manual testing bypass](../src/core/AGENTS.md#agent--
 The same PATH prepend is required before running parent `test_*.exe` directly. `ctest --test-dir build-debug` inherits the caller's PATH, so set it once at the start of the session.
 
 vxcore submodule tests (`libs/vxcore/build_test/bin/Debug/test_*.exe`) do NOT depend on Qt or VTextEdit and need no PATH setup.
+
+### HTTP API verification
+
+The five mandatory targets are `test_httpserver`, `test_apiauth`, `test_restapi`,
+`test_vnoteapibackend` and `test_httpapilifecycle`. CI checks their registration with
+`python scripts/e2e/smoke_http_api.py --check-registration <build>` before running tests.
+Transport and REST policy tests link no application services or widgets; adapter/lifecycle
+tests deliberately use real core services/configuration. New API context fixtures redirect the
+process temp root before enabling vxcore test mode, since `vxcore_test_config` is otherwise a
+shared directory across test executables. Restore environment only after context/worker teardown.
+On Windows, `test_httpapilifecycle` writes plaintext and JUnit reports in `tests/api` within
+the build tree as well as stdout. CI preserves both before diagnostic reruns: hosted console
+capture can omit the assertions even when CTest correctly reports failure.
+Use an OS temp root outside any Git worktree for these regression runs: a temp directory under
+`build*` still inherits this repository's `.gitattributes`, invalidating tests that intentionally
+exercise files outside Git. Normalize the temp path before passing it to native path guards.
+
+Backend coverage shares saved/live, conditional mutation and dirty/external-write scenarios
+between bundled and raw fixtures. Raw-only coverage discovers external nested files, creates by
+a discovered non-root folder UUID, and restarts the context/services on the same profile to check
+identity persistence. Do not use `closeNotebook` for that assertion: closing a raw notebook removes
+its local metadata, unlike application/context restart.
+
+For application smoke, use the disposable portable profile rules above, issue separate
+read-only and write/trash tokens from its Settings page, and create `.http-api-smoke.json`
+in the fixture root containing `{"disposable":true,"notebookId":"<fixture UUID>"}`.
+Keep token files inside that root. Run `scripts/e2e/smoke_http_api.py` with `--base-url`,
+`--fixture-root`, `--token-file` and `--read-token-file`; the script only touches uniquely named
+fixture notes and verifies actual disk/recycle contents. Exercise dirty-editor rejection and
+owner revocation in the GUI; `--expect-revoked` checks the issued token after revocation.
+For raw fixtures, add `--expect-no-trash`. The writer must still have `notes:trash`: require a
+202-admitted operation that ends in `422/unsupported_trash`, not a scope-denied 403. The runner
+checks unchanged bytes, versions, UUID and notebook tree; it never permanently deletes a raw
+note as cleanup. The default bundled mode must continue proving actual recoverable trash.
+
+Noninteractive provisioning may use the real vxcore C API and `ApiAuth`/`ApiCredentialStore` in
+a disposable native helper, not hand-written verifier records. Copy the helper and VNote beside
+preexisting `config/app` and `config/local`, keep vxcore test mode off, and check the actual data
+paths. A test-mode profile belongs to the unit-test process and is not the portable app profile.
+Provision Windows portable API grants in `config/local/http-api`; other platforms retain
+`config/app/http-api`. The Windows lifecycle regression must reload the issued token from local
+data and ensure issuance did not create an app/roaming credential directory.
+Persist a fixture notebook/session before launching the app to avoid first-run Documents writes;
+host Python must not load a non-isolated vxcore context. Keep all credentials inside the fixture.
+HTTPS smoke takes `--ca-file` for process-local certificate verification; never install a test
+CA globally or disable TLS verification. A loopback HTTPS proxy run does not prove public
+network reachability. Strict-trash changes also require the separate vxcore `test_node` suite.
 
 ## Adding New Tests
 Use the `add_qt_test()` helper function in CMakeLists.txt:

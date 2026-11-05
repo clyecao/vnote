@@ -6,6 +6,7 @@
 #include <QPointer>
 #include <QScopedValueRollback>
 #include <QTimer>
+#include <QVBoxLayout>
 #include <QWidget>
 #include <QWindow>
 
@@ -19,24 +20,50 @@
 #endif
 
 namespace vnotex {
-// Positions an existing status widget above the content, outside the window's layout.
+// Attaches an existing status widget below the content or over its bottom edge.
 // The attachment follows the status widget's lifetime, including shared ownership.
 class StatusOverlay : public QObject {
 public:
-  StatusOverlay(QWidget *p_status, QLayout *p_contentLayout)
+  StatusOverlay(QWidget *p_status, QLayout *p_contentLayout, QVBoxLayout *p_bottomLayout,
+                bool p_fixed)
       : QObject(p_status), m_status(p_status), m_contentLayout(p_contentLayout),
-        m_window(p_contentLayout->parentWidget()) {
+        m_bottomLayout(p_bottomLayout), m_window(p_contentLayout->parentWidget()) {
     m_status->setParent(m_window);
     m_status->setAutoFillBackground(true);
     m_status->setAttribute(Qt::WA_StyledBackground);
     m_status->setAttribute(Qt::WA_ShowWithoutActivating);
 #ifdef Q_OS_WIN
-    // Alien siblings cannot paint over WebEngine with native siblings disabled.
+    // Keep only the overlay native. Native tab ancestors expose stale backing
+    // surfaces while QStackedWidget hides one reader and shows the next.
+    m_status->setAttribute(Qt::WA_DontCreateNativeAncestors);
     m_status->setAttribute(Qt::WA_NativeWindow);
 #endif
     m_window->installEventFilter(this);
     m_status->installEventFilter(this);
     watchContent();
+    setFixed(p_fixed);
+    reposition();
+  }
+
+  void setFixed(bool p_fixed) {
+    if (m_fixed == p_fixed || m_positioning || !m_window || !m_contentLayout || !m_bottomLayout ||
+        m_status->parentWidget() != m_window) {
+      return;
+    }
+    {
+      QScopedValueRollback<bool> guard(m_positioning, true);
+      m_fixed = p_fixed;
+      if (m_fixed) {
+        // Persistent columns must not impose their intrinsic width on the pane.
+        m_status->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
+        m_bottomLayout->insertWidget(0, m_status, 0);
+      } else {
+        m_bottomLayout->removeWidget(m_status);
+      }
+    }
+    if (auto *layout = m_window->layout()) {
+      layout->activate();
+    }
     reposition();
   }
 
@@ -61,10 +88,9 @@ protected:
     if (!m_window || !m_contentLayout || m_status->parentWidget() != m_window) {
       return false;
     }
-    const bool styleChanged = p_watched == m_status &&
-                              (p_event->type() == QEvent::StyleChange ||
-                               p_event->type() == QEvent::FontChange ||
-                               p_event->type() == QEvent::PaletteChange);
+    const bool styleChanged = p_watched == m_status && (p_event->type() == QEvent::StyleChange ||
+                                                        p_event->type() == QEvent::FontChange ||
+                                                        p_event->type() == QEvent::PaletteChange);
 #ifdef Q_OS_WIN
     if (styleChanged) {
       m_maskDirty = true;
@@ -156,11 +182,13 @@ private:
     if (auto *layout = m_window->layout()) {
       layout->activate();
     }
-    const QRect area = m_contentLayout->geometry().intersected(m_window->contentsRect());
-    const int height = qBound(0, m_status->sizeHint().height(), area.height());
-    const QRect geometry(area.left(), area.bottom() + 1 - height, area.width(), height);
-    if (m_status->geometry() != geometry) {
-      m_status->setGeometry(geometry);
+    if (!m_fixed) {
+      const QRect area = m_contentLayout->geometry().intersected(m_window->contentsRect());
+      const int height = qBound(0, m_status->sizeHint().height(), area.height());
+      const QRect geometry(area.left(), area.bottom() + 1 - height, area.width(), height);
+      if (m_status->geometry() != geometry) {
+        m_status->setGeometry(geometry);
+      }
     }
 #ifdef Q_OS_WIN
     if (!m_status->isHidden()) {
@@ -179,7 +207,9 @@ private:
 
   QWidget *m_status;
   QPointer<QLayout> m_contentLayout;
+  QPointer<QVBoxLayout> m_bottomLayout;
   QPointer<QWidget> m_window;
+  bool m_fixed = false;
   bool m_positioning = false;
   bool m_styleUpdatePending = false;
 #ifdef Q_OS_WIN

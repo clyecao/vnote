@@ -12,9 +12,12 @@
 #include <core/hookcontext.h>
 #include <core/hooknames.h>
 #include <core/servicelocator.h>
+#include <core/services/configcoreservice.h>
 #include <core/services/hookmanager.h>
 #include <core/services/notebookcoreservice.h>
+#include <core/sessionconfig.h>
 #include <utils/fileutils2.h>
+#include <vxcore/notebook_json_keys.h>
 
 using namespace vnotex;
 
@@ -81,56 +84,52 @@ void FirstRunController::clearReadOnlyRecursively(const QString &p_dirPath) {
 bool FirstRunController::createDefaultNotebook() {
   const QString root = ConfigMgr2::getDefaultNotebookPath(m_parentDirOverride);
 
-  // Collision guard: skip when the target path is an existing file or a
-  // non-empty directory. An empty existing dir (or a non-existent path) is
-  // allowed to proceed; the bundled notebook is copied INTO root below.
-  // NOTE: PathUtils::isEmptyDir() returns TRUE for a non-existent path, so it
-  // is the wrong primitive here -- use QFileInfo/QDir directly.
-  QFileInfo fi(root);
-  if (fi.exists()) {
-    if (fi.isFile() || (fi.isDir() && !QDir(root).isEmpty())) {
-      qInfo() << "FirstRunController: skip FRE, target not empty:" << root;
-      return false; // no signal
-    }
-    // empty existing dir is allowed to proceed
+  const QFileInfo fi(root);
+  if (fi.exists() && !fi.isDir()) {
+    qInfo() << "FirstRunController: skip FRE, target is not a directory:" << root;
+    return false;
   }
 
-  // Resolve the bundled-notebook source. In production it lives inside the
-  // separately-packaged vnote_extra.rcc (mounted via the "app:" prefix); tests
-  // point at a writable on-disk fixture and skip the rcc entirely.
-  QString sourceDir = m_sourceDirOverride;
-  const QString extraRcc(QStringLiteral("app:vnote_extra.rcc"));
-  bool rccRegistered = false;
-  auto rccCleanup = qScopeGuard([&extraRcc, &rccRegistered] {
-    if (rccRegistered) {
-      QResource::unregisterResource(extraRcc);
+  // Only materialize a new notebook into an absent or empty destination.
+  // Existing content is opened below without copying or changing permissions.
+  if (!fi.exists() || QDir(root).isEmpty()) {
+    // Resolve the bundled-notebook source. In production it lives inside the
+    // separately-packaged vnote_extra.rcc (mounted via the "app:" prefix); tests
+    // point at a writable on-disk fixture and skip the rcc entirely.
+    QString sourceDir = m_sourceDirOverride;
+    const QString extraRcc(QStringLiteral("app:vnote_extra.rcc"));
+    bool rccRegistered = false;
+    auto rccCleanup = qScopeGuard([&extraRcc, &rccRegistered] {
+      if (rccRegistered) {
+        QResource::unregisterResource(extraRcc);
+      }
+    });
+    if (sourceDir.isEmpty()) {
+      if (!QResource::registerResource(extraRcc)) {
+        qWarning() << "FirstRunController: failed to register resource" << extraRcc;
+        return false;
+      }
+      rccRegistered = true;
+      sourceDir = QStringLiteral(":/vnotex/data/extra/default-notebook");
     }
-  });
-  if (sourceDir.isEmpty()) {
-    if (!QResource::registerResource(extraRcc)) {
-      qWarning() << "FirstRunController: failed to register resource" << extraRcc;
+
+    if (!QFileInfo::exists(sourceDir)) {
+      qWarning() << "FirstRunController: bundled notebook source missing:" << sourceDir;
       return false;
     }
-    rccRegistered = true;
-    sourceDir = QStringLiteral(":/vnotex/data/extra/default-notebook");
+
+    // Copy the bundled notebook tree into the target root.
+    const Error copyErr = FileUtils2::copyDir(sourceDir, root);
+    if (copyErr) {
+      qWarning() << "FirstRunController: failed to copy bundled notebook:" << copyErr.what();
+      return false;
+    }
+
+    // Files copied from the rcc are read-only; make them writable on disk.
+    clearReadOnlyRecursively(root);
   }
 
-  if (!QFileInfo::exists(sourceDir)) {
-    qWarning() << "FirstRunController: bundled notebook source missing:" << sourceDir;
-    return false;
-  }
-
-  // Copy the bundled notebook tree into the target root.
-  const Error copyErr = FileUtils2::copyDir(sourceDir, root);
-  if (copyErr) {
-    qWarning() << "FirstRunController: failed to copy bundled notebook:" << copyErr.what();
-    return false;
-  }
-
-  // Files copied from the rcc are read-only; make them writable on disk.
-  clearReadOnlyRecursively(root);
-
-  // Open the freshly-materialized notebook (fires NotebookAfterOpen).
+  // Open the new or existing notebook (fires NotebookAfterOpen).
   auto *nb = m_services.get<NotebookCoreService>();
   if (!nb) {
     qWarning()
@@ -144,8 +143,44 @@ bool FirstRunController::createDefaultNotebook() {
     return false;
   }
 
+  initializeQuickAccess(notebookId);
   emit defaultNotebookCreated(notebookId);
   return true;
+}
+
+void FirstRunController::initializeQuickAccess(const QString &p_notebookId) {
+  auto *cfg = m_services.get<ConfigMgr2>();
+  if (!cfg || !cfg->getSessionConfig().getQuickAccessItems().isEmpty()) {
+    return;
+  }
+
+  if (!cfg->isSessionConfigLoaded()) {
+    // A missing session is safe to initialize; an unreadable one is not.
+    auto *configService = m_services.get<ConfigCoreService>();
+    if (!configService) {
+      return;
+    }
+    bool readOk = false;
+    configService->getConfigByName(DataLocation::Local, QStringLiteral("session"), &readOk);
+    if (!readOk) {
+      return;
+    }
+  }
+
+  auto *nb = m_services.get<NotebookCoreService>();
+  const QString noteName = QStringLiteral("all-in-one.md");
+  VxCoreError error = VXCORE_OK;
+  const auto fileInfo = nb->getFileInfo(p_notebookId, noteName, &error);
+  if (error != VXCORE_OK) {
+    return;
+  }
+  SessionConfig::QuickAccessItem item;
+  item.m_path = nb->buildAbsolutePath(p_notebookId, noteName);
+  item.m_uuid = fileInfo.value(QLatin1String(vxcore::kJsonKeyId)).toString();
+  if (item.m_path.isEmpty() || item.m_uuid.isEmpty()) {
+    return;
+  }
+  cfg->getSessionConfig().setQuickAccessItems({item});
 }
 
 void FirstRunController::onMainWindowAfterStart() {

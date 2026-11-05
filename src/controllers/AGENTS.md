@@ -17,6 +17,20 @@ See [MVC Rules](../../AGENTS.md#mvc-rules-must-follow) — Key rule for controll
 
 See [MVC Example](../AGENTS.md#mvc-example-notebook-node-operations) for the Controller → View → Model flow.
 
+## First-run notebook
+
+`FirstRunController` creates or reopens the default notebook only on a version change with zero
+open notebooks. Missing or empty destinations receive the bundled notebook; an existing non-empty
+directory is opened directly, without copying files or changing their permissions. Failed opens
+never fall back to copying, and non-directory targets are rejected. Both successful paths emit
+`defaultNotebookCreated`, which reloads the explorer and selects the notebook. Before that signal,
+Quick Access is initialized with `all-in-one.md` using the notebook service's absolute path
+and node UUID, through `SessionConfig::setQuickAccessItems()`, only when Quick Access is empty.
+Existing entries are untouched. An unloaded session must be checked through `ConfigCoreService`
+to distinguish absent from unreadable; an unreadable session or unavailable note is not pinned.
+Skipped or failed setup never initializes Quick Access. Reopened notebooks are not given missing
+bundled notes, and their existing contents are not migrated when the bundled notes change.
+
 ## Explicit file-open destinations
 
 `FileOpenSettings::m_targetWorkspaceId` names an existing hosted workspace GUID,
@@ -49,6 +63,16 @@ Coverage: `tests/widgets/test_viewarea_tab_reuse.cpp` exercises real services an
 windows, destination precedence, batch boundaries, duplicates, background opens,
 main-tab reuse, unavailable targets, ownership cleanup and reentrant opens.
 
+## Node Mark menus
+
+`NotebookNodeController` builds **Mark → Text / Background** for bundled nodes in
+both explorer layouts. Each submenu offers **Auto** and the original 12 preset
+colors, using the PDF `CommentColorSwatch` renderer with a literal-color resolver.
+Checked state represents the full effective selection; mixed values check nothing.
+The controller applies only the chosen metadata key to each selected file or folder.
+Auto removes that key; the opposite color and unrelated metadata remain unchanged.
+Keep live read-only guards at action execution. Mark has no dialog or view forwarding.
+
 ## Multi-Target Actions with Dialogs (Batch Pattern)
 
 When adding a multi-target action that requires user input via a dialog, the MVC layers have distinct responsibilities:
@@ -57,7 +81,7 @@ When adding a multi-target action that requires user input via a dialog, the MVC
 |---|---|---|
 | **Controller** (`NotebookNodeController`) | Decides "an action was requested on this list of nodes"; emits ONE list signal per request. Runs no UI; uses no `QDialog`. | Showing dialogs. Looping a per-id signal. Holding dialog state. |
 | **View** (`NotebookExplorer2` + its explorers) | Receives the list signal, shows ONE dialog seeded with sensible defaults, then iterates the list and invokes the existing per-id apply path. Owns all `QDialog` instances. | Looping the controller's emit. Owning business state. Direct service calls bypassing controller. |
-| **Model** (notebook node store via vxcore services) | Per-id apply primitives (`handleMarkResult`, etc.) remain single-target and idempotent. | Knowing about selections, dialogs, or batches. |
+| **Model** (notebook node store via vxcore services) | Per-id apply primitives remain single-target and idempotent. | Knowing about selections, dialogs, or batches. |
 
 **Rule for new actions**: When adding a multi-target action that requires user input via a dialog, the request signal MUST take `QList<NodeIdentifier>` (even when size is 1); the View slot MUST show ONE dialog; the apply path MUST stay per-id and be looped in the slot. **Use ONE method/signal name per action — widen the signature rather than introducing parallel singular/plural variants.** NEVER define a per-id signal that the view will fire N dialogs from.
 
@@ -68,7 +92,7 @@ The controller then invokes `NodeTransferService`, reconciles structured clipboa
 models, and selects the returned destination. Same-notebook paste always reconstructs and uses the
 original path identifiers; optional stable UUID/kind/resume data must not affect that branch.
 
-**Audit summary**: As of 2026-05-16, the only multi-target action that previously violated this rule was Mark; its `markRequested` signal was widened to `QList<NodeIdentifier>` (same name, one method) per the contract. As of 2026-08-03, the two remaining *undocumented* blocking modals were removed:
+**Audit summary**: The two remaining *undocumented* blocking modals were removed:
 
 - `AttachmentController::addAttachments()` / `deleteAttachments()` no longer open a `QFileDialog` / `QMessageBox`. Both were triggered from `QAction` handlers in `src/widgets/attachmentpopup2.cpp`, so the view was already on the stack and no new signal was needed: the popup now shows the dialog (parented to `AttachmentPopup2::dialogParent()`, i.e. the tool button's window — `this` is a `QMenu` and would be the wrong parent) and calls `addAttachments(const QStringList &)` with the result. The popup re-applies the controller's guards so no dialog is raised whose result would be discarded; the controller keeps its own guards as defense in depth. Gate: `tests/controllers/test_attachmentcontroller.cpp` drives both paths (its `QApplication` also supports real clipboard coverage) — before this change either call blocked on a modal.
 - `NotebookNodeController::handleRenameResult`'s unsaved-changes `MessageBoxHelper::questionSaveDiscardCancel` was deleted outright (it dropped the file's last `widgets/` include). It was unreachable, and it was not protecting anything: `NotebookCoreService::renameFile/renameFolder` fire `NodeAfterRename`, and `ViewAreaController::onNodeAfterRename` (`viewareacontroller.cpp:1921-1955`) retargets open windows onto the already-updated buffer paths. Renaming a note with unsaved changes therefore proceeds without asking — today's behavior, with no data loss.
@@ -421,16 +445,74 @@ protection only when saved as part of an encrypted note body.
 
 `ExportController` only selects sources, resolves canonical file-type names through
 `FileTypeCoreService`, rejects protected notes and forwards progress/results. It must not
-construct editors or WebEngine pages. Current Buffer keeps the committed live snapshot from
+construct editors or WebEngine pages. Current Buffer keeps the supplied live snapshot from
 `MainWindow2`; an explicitly supplied empty snapshot is authoritative, never a disk fallback.
 Current Note and batch selections use disk snapshots without saving open notes.
+`sourceFileTypes()` previews the actual selection without reading bodies, rendering or saving;
+protected, empty and unresolvable selections are unavailable. Preview suppresses controller
+collector diagnostics, but actual export retains protected-note refusal before writes.
 
-`ExportRendererFactory` in `src/export` is a value-owned, lowercase-keyed registry. Built-ins map
-Markdown/Text/Others to `WebViewExporter` and MindMap to `MindMapExporter`; unknown or empty
-types use Others. `Exporter` owns naming, attachments, per-operation renderer reuse, batch
-failure policy and final conversion. Every HTML consumer (standalone, PDF or custom) uses an
-`ExportHtmlRequest` carrying its purpose; do not restore format-only source routing or infer
-native types from suffixes inside renderers/batch loops.
+`ExportRendererFactory` in `src/export` stores capabilities and creators together, using the
+same lowercase/Others lookup for metadata and construction. Metadata queries create no renderer,
+editor, browser or compiler. Built-ins map Markdown/Text/Others to `WebViewExporter`, MindMap to
+`MindMapExporter`, and Typst to `TypstExporter`. Typst targets are Typst/HTML/PDF/Custom;
+MindMap adds native MindMap to its Markdown/HTML/PDF/Custom projection targets. Markdown and
+MindMap cannot target Typst. Persisted format values 0–3 are unchanged; Typst=4 and MindMap=5.
+
+`Exporter` owns naming, attachments, per-operation renderer reuse and batch failure policy.
+It validates every selected source/target pair before creating any output directory; empty
+batches create nothing. Mixed selections use only shared formats, never silently omit an
+incompatible source. Source output uses `renderSource` in unique per-note folders, preserving
+the original Markdown filename, `.md` for MindMap projection, `.mmm` for native MindMap, and
+`.typst` for Typst. Failed source attempts remove only their fresh bundle folder. Every HTML
+consumer carries its Standalone/Pdf/Custom purpose in `ExportHtmlRequest`; never infer native
+types from suffixes inside renderers or batch loops.
+
+Native source output preserves the supplied QString text and uses library-owned content scanners.
+MindMap URL paths are classified then URL-decoded; Typst image literals are already filenames
+and retain literal `%`, `#` and `?`. Only internal relative image files are copied, preserving
+subdirectories. Canonical containment includes ancestor symlinks/junctions; outside/missing
+images warn, while copy failures and destination collisions fail without renaming or overwriting.
+Whitespace-only MindMap snapshots bypass parsing and remain unchanged. Typst incomplete scans
+copy known literals and warn; imports and dynamic references are not bundled. Attachments remain
+an independent optional Exporter copy, not an imported-project bundler.
+
+Typst HTML/PDF borrow the application-owned runtime through widget-independent `TypstCompiler`.
+The canonical containing directory and actual main filename identify the project; only the
+supplied text is overlaid. Theme text-font defaults apply, authored styles win, downloads remain
+off and preview colors never enter output. Native PDF preserves document page layout and never
+passes through HTML/wkhtmltopdf. Semantic HTML is reflowable, preserves native warnings, and does
+not rewrite arbitrary authored HTML URLs. MIME HTML is unsupported. Cancellation retires the
+compiler without shutting down the shared runtime; successful bytes publish through QSaveFile.
+
+PDF all-in-one requires every source's Html backend and wkhtmltopdf; any native PDF source is
+rejected before writes. Custom may combine heterogeneous raw disk paths or per-source HTML;
+all HTML preparation must succeed before launching the command. Raw Custom deliberately uses
+original saved files, even for Current Buffer. The selected Custom option is copied at operation
+entry so event-loop mutations cannot invalidate it. `%3`/`%4` remain independent style inputs.
+
+`ExportDialog2` intersects target values in first-source order and maps enum values explicitly
+to source/HTML/PDF/Custom pages. Its visible controls are the union of applicable option groups;
+labels hide with fields. Native Typst HTML/PDF omit web-print controls and compiler descriptions.
+Hidden preferences survive switching: only the effective export copy
+suppresses unavailable PDF all-in-one. Custom style placeholders remain usable for native/raw
+input, and all option widgets and scheme actions are disabled while export pumps events.
+
+The HTML page always exposes **Apply custom styles** and **Edit**, including for native
+renderers. The optional `htmlOption.applyCustomizedStyles` value stores only an explicit user
+choice; absence defaults off for Markdown (or any mixed selection containing Markdown) and on
+for other sources. Merely viewing a source's default must not persist it as an override.
+`Exporter::doExportHtml` is the single application point for standalone HTML and PDF/Custom
+HTML intermediates. Native source, raw Custom and native Typst PDF bypass it.
+
+`ExportStyleSheet` resolves the user-owned `web/css/export.css` through ConfigMgr2. Missing
+files are seeded from the single bundled default, including same-version profiles; existing
+custom or empty files survive updates/recovery. Without ConfigMgr2, native-only consumers
+use that bundled default. The default centers a border-box body with `max-width: 80%`. **Edit** opens
+the real external CSS buffer without replacing the export's original source snapshot; save
+before exporting. Each output embeds the saved CSS after renderer styles as a UTF-8 data-URL
+stylesheet; relative CSS resources are not copied. Unreadable CSS or incompatible HTML fails
+without returning a published HTML file. Markdown's exportglobalstyles.css remains separate.
 
 MindMap Markdown is the m3 C API's readable document projection with `.md` naming and
 media copied from that projection's resource base. The main topic is H1, levels 2–6 are
@@ -445,8 +527,8 @@ for queued image requests to settle. Missing images retain explicit placeholders
 malformed input and the whole-export image deadline fail rather than snapshot incomplete work.
 The visual map is selectable HTML node text plus inline SVG connectors, not a whole-map PNG;
 only supplied node images are raster data. Standalone and Custom HTML use the same native
-`toHtml()` document: a natural 100% map directly in normal flow, without width caps, nested scrolling,
-viewer controls or sizing JavaScript. Topic anchors navigate to the continuous articles below it.
+`toHtml()` document: a natural 100% map directly in normal flow, without map-width caps,
+nested scrolling, viewer controls or sizing JavaScript. Topic anchors navigate to the continuous articles below it.
 The visual map uses the mind-map automatic-numbering preference and shared editor section-number
 pattern, refreshed for every export including renderer reuse. Main/orphan roots and article titles
 remain unnumbered; article anchors use node identity rather than decorated visual text.
@@ -467,9 +549,13 @@ gutter rather than cumulative print indentation. Bound figures to the printable 
 notes splittable. A paint-only transform or unscaled flow width can shrink every printed page;
 the regression produced 8pt rather than 12pt body text. The Qt 6.9+ host test reads every PDF page
 with the bundled reader and checks map-first/article-next ordering, complete notes and image
-geometry plus actual 12pt body. DOM bounds/signatures alone miss this.
+geometry plus actual 12pt body. DOM bounds/signatures alone miss this. A PDF-only ES5 fitter
+measures the styled parent's content width after load and before print, capping the map's zoom
+and reserved footprint together. It must not undo the user's body width/margins or shrink
+article fonts; standalone and Custom maps remain script-free.
 
-`HtmlPdfExporter` owns final transport, not source rendering. Qt loads the rendered HTML by file
+`HtmlPdfExporter` owns final transport for Html-backend PDF targets, not native Typst or source
+rendering. Qt loads the rendered HTML by file
 URL (including >2 MiB documents), allows local sidecars and the existing unprotected remote-image
 policy, and waits for decoded images/fonts before printing. Its off-record profile/page and scoped
 non-displayed WebEngine view provide the render surface required for `image.decode()` completion.
@@ -482,6 +568,11 @@ also enables SVG-to-PNG and diagram rasterization with its paper geometry and Ma
 custom HTML enables math/SVG-to-PNG but retains vector diagrams and its selected scrollability.
 Keep temporary HTML/resources alive until the external consumer returns. Raw custom input stays raw.
 
-Behavior coverage: `tests/export/test_mindmapexport.cpp`, `test_htmlpdfexporter.cpp`, and the
-complete controller/protected-editor targets. The controller's substitute exporter tests source
-policy only; it is not evidence of rendering correctness.
+Behavior coverage: `tests/export/test_mindmapexport.cpp`, `test_htmlpdfexporter.cpp`,
+`tests/widgets/test_typstexport.cpp`, `test_exportdialog2.cpp`, and the complete
+controller/protected-editor targets.
+The controller's substitute exporter tests source policy only; it is not evidence of rendering
+correctness. Native compiler tests are registered in the vtextedit build subtree, so run its
+`test_typsteditor` CTest directory separately when the parent CTest tree does not include it.
+For Windows Debug GUI smoke, leave `QTWEBENGINEPROCESS_PATH` unset as the export tests do;
+forcing the release `QtWebEngineProcess.exe` into a Debug host causes Mojo IPC failures.

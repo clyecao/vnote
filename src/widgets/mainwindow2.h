@@ -202,6 +202,9 @@ signals:
 
   void minimizedToSystemTray();
 
+  // Session restoration and queued startup opens have completed.
+  void postInitFinished();
+
   // File operations.
   void newNoteRequested();
   void newFolderRequested();
@@ -379,8 +382,8 @@ private:
   // Long-lived owner of hook-driven recycle-bin retention policy.
   RecycleBinController *m_recycleBinController = nullptr;
 
-  // First-run experience controller (creates a default notebook on version
-  // change when zero notebooks exist). Owned by MainWindow2; surfacing handled
+  // First-run controller (creates or reopens a default notebook on version
+  // change when zero notebooks are open). Owned by MainWindow2; surfacing handled
   // by the defaultNotebookCreated connection in setupUI().
   FirstRunController *m_firstRunController = nullptr;
 

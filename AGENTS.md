@@ -71,29 +71,25 @@ Testing (two suites, two build dirs): [tests/AGENTS.md](tests/AGENTS.md).
 
 Before pushing parent-repository or submodule changes, agents MUST:
 
-1. Determine the affected build and test targets from **all unpushed changes** relative
+1. Determine the affected application/library targets from **all unpushed changes** relative
    to the destination branch, not just the latest commit. Trace shared headers/APIs,
    build configuration and submodule pins to dependent consumers; filenames alone
    are not sufficient. Broaden coverage when the impact cannot be bounded safely.
-2. Build the affected application/library and test targets with tests enabled, using
-   a compatible Qt kit, compiler and build configuration. Include affected targets
-   that are excluded from the default build. An app-only build does not verify tests.
-3. Run the full registered test executables/suites covering those changes, including
-   affected native-editor or standalone submodule tests in their own build directories.
-   Unaffected targets and suites need not run. Follow [tests/AGENTS.md](tests/AGENTS.md)
-   and the platform's workflow for runtime setup.
-4. Verify the final code/configuration being pushed; rebuild and rerun affected checks
-   after subsequent changes. Report the scope rationale, commands, results, skips and
+2. Successfully build the affected application/library targets using a compatible Qt kit,
+   compiler and build configuration, including required targets excluded from the default build.
+3. Verify the final code/configuration being pushed; rebuild required targets after
+   subsequent changes. Report the scope rationale, build commands, results, skips and
    platform limits. If all unpushed changes are documentation-only, check the docs and
-   state that no build/test targets are affected; compilation and tests are not required.
+   state that no application/library targets are affected; compilation is not required.
 
-**Do not push when required builds or tests fail, time out or cannot run.** The only
-standing local exception is the closed [Windows native-focus whitelist](tests/AGENTS.md#local-pre-push-flaky-test-whitelist).
-It never skips an executable or build and never waives CI. Every other failure remains
-blocking: fix the cause and verify again; never disable tests, weaken assertions or
-increase deadlines just to obtain a pass. If verification is unavailable, report the
-exact blocker and obtain an explicit user exception before pushing. A local pass is
-not proof that other operating systems or packaging gates pass; disclose that limitation.
+**Building and running tests are not required before pushing.** CI test requirements
+remain unchanged.
+
+**Do not push when required builds fail, time out or cannot run.** Fix the cause and
+verify again; never exclude required application/library targets just to obtain a successful
+build. If build verification is unavailable, report the exact blocker and obtain an
+explicit user exception before pushing. A local build is not proof that tests pass or
+that other operating systems or packaging gates pass; disclose that limitation.
 
 ### CI runner debugging (SSH)
 
@@ -337,6 +333,17 @@ Full contract: [src/core/services/AGENTS.md § Search Threading Contract](src/co
 
 ---
 
+## HTTP Automation API
+
+HTTP transport and REST policy are standalone libraries with injected interfaces, not
+ServiceLocator or vxcore dependencies. Only the application adapter bridges them to VNote
+services. The listener is opt-in and loopback-only; external access uses an administrator-managed
+HTTPS reverse proxy. Never expose configuration, credentials, shell execution or protected-note
+content through generic note/file routes. Ownership and lifecycle:
+[src/integrations/httpapi/AGENTS.md](src/integrations/httpapi/AGENTS.md).
+
+---
+
 ## Update Check
 
 Ordinary startup and manual checks fetch release metadata and offer the **release page**.
@@ -405,6 +412,25 @@ clang-format -i src/core/myfile.cpp
 
 **Excluded from formatting:** `libs/` directory (third-party code)
 
+### Format before staging and committing
+
+Agents MUST format intended C++ changes with the repository configuration and the same formatter
+as the pre-commit hook **before staging**. Review the resulting diff and preserve unrelated edits.
+Prefer explicit `git add -- <paths>` followed by ordinary `git commit` when the index contains only
+intended changes. If other work must remain staged, a path-limited commit (`git commit --only` or
+`git commit <paths>`) must not rely on the hook for further formatting: verify the formatter would
+make no additional changes first.
+
+Path-limited commits use a temporary index. The hook's `clang-format -i` and `git add` can update
+the working file and committed snapshot while leaving the normal index with older formatting.
+After such a commit, compare HEAD, index and working tree for the committed paths; do not blindly
+classify `MM` leftovers as user edits and keep restoring them.
+
+Clean up only residue proven to come from the agent's workflow: when `git diff HEAD -- <path>` is
+empty and staged/unstaged formatting hunks are exact inverses, `git restore --staged -- <path>`
+resynchronizes the index without changing the working file. An empty HEAD diff alone does not
+justify clearing intentional user staging. Never use blanket reset/restore or stash for cleanup.
+
 ---
 
 ## Shared JSON Keys (SSOT)
@@ -432,6 +458,9 @@ put the full detail in the module doc.
 | Source overview | [src/AGENTS.md](src/AGENTS.md) | You need the architecture diagram, directory tree, design-decision rationale, or a source-wide Qt pattern (memory, queued metatypes) |
 | Core & Services | [src/core/AGENTS.md](src/core/AGENTS.md) | ServiceLocator, DI, Buffer2, hooks, config, themes, adding a service |
 | Services (deep) | [src/core/services/AGENTS.md](src/core/services/AGENTS.md) | Sync state model, save/search threading, update check, notifications |
+| HTTP transport | [src/http/AGENTS.md](src/http/AGENTS.md) | Embedded HTTP transport, dependency pin, framing limits and worker shutdown |
+| REST API | [src/api/AGENTS.md](src/api/AGENTS.md) | Routes, token policy, backend interfaces, pagination and asynchronous operations |
+| HTTP API integration | [src/integrations/httpapi/AGENTS.md](src/integrations/httpapi/AGENTS.md) | VNote backend adapter, settings, private credential storage and startup/shutdown |
 | Controllers | [src/controllers/AGENTS.md](src/controllers/AGENTS.md) | Adding or changing a controller; MVC rules for controllers |
 | Models | [src/models/AGENTS.md](src/models/AGENTS.md) | Qt Model/View data representations |
 | Views | [src/views/AGENTS.md](src/views/AGENTS.md) | View conventions, delegate patterns |

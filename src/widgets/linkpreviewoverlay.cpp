@@ -13,6 +13,7 @@
 #include <QVBoxLayout>
 #include <QWindow>
 
+#include "buttonpopup.h"
 #include "propertydefs.h"
 #include "viewsplit2.h"
 #include "viewwindow2.h"
@@ -60,7 +61,7 @@ protected:
     if (!widget) {
       return false;
     }
-    if (!m_source || QApplication::activeModalWidget() || QApplication::activePopupWidget() ||
+    if (!m_source || QApplication::activeModalWidget() || ButtonPopup::activePopupWidget() ||
         type == QEvent::MouseButtonPress) {
       stop();
       return false;
@@ -113,7 +114,9 @@ LinkPreviewOverlay::LinkPreviewOverlay(ServiceLocator &p_services, ViewWindow2 *
   setAttribute(Qt::WA_ShowWithoutActivating);
 #ifdef Q_OS_WIN
   // An interactive native child must cover late-created WebEngine HWNDs.
-  // Unlike StatusOverlay, this surface must retain ordinary native hit testing.
+  // Keep tab ancestors alien across promotion/reparenting; unlike StatusOverlay,
+  // this surface retains ordinary native hit testing.
+  setAttribute(Qt::WA_DontCreateNativeAncestors);
   setAttribute(Qt::WA_NativeWindow);
 #endif
 
@@ -138,7 +141,8 @@ LinkPreviewOverlay::LinkPreviewOverlay(ServiceLocator &p_services, ViewWindow2 *
   openButton->setObjectName(QStringLiteral("openLinkPreviewInNewTabsButton"));
   openButton->setProperty(PropertyDefs::c_actionToolButton, true);
   openButton->setToolButtonStyle(Qt::ToolButtonIconOnly);
-  auto *openAction = new QAction(tr("Open in New Tab"), openButton);
+  m_openInNewTabsAction = new QAction(tr("Open in New Tab"), openButton);
+  auto *openAction = m_openInNewTabsAction;
   openAction->setObjectName(QStringLiteral("openLinkPreviewInNewTabsAction"));
   openAction->setToolTip(tr("Open in New Tab"));
   openButton->setDefaultAction(openAction);
@@ -164,8 +168,8 @@ LinkPreviewOverlay::LinkPreviewOverlay(ServiceLocator &p_services, ViewWindow2 *
       closeAction->setIcon(
           IconUtils::fetchIcon(themeService->getIconFile(QStringLiteral("close.svg")), fg));
     } else {
-      openAction->setIcon(IconUtils::fetchIcon(
-          QStringLiteral(":/vnotex/data/core/icons/open_in_new_tab.svg")));
+      openAction->setIcon(
+          IconUtils::fetchIcon(QStringLiteral(":/vnotex/data/core/icons/open_in_new_tab.svg")));
       closeAction->setIcon(
           IconUtils::fetchIcon(QStringLiteral(":/vnotex/data/core/icons/close.svg")));
     }
@@ -183,6 +187,10 @@ LinkPreviewOverlay::LinkPreviewOverlay(ServiceLocator &p_services, ViewWindow2 *
 }
 
 ViewSplit2 *LinkPreviewOverlay::getViewSplit() const { return m_viewSplit; }
+
+void LinkPreviewOverlay::setOpenInNewTabsEnabled(bool p_enabled) {
+  m_openInNewTabsAction->setEnabled(p_enabled);
+}
 
 void LinkPreviewOverlay::setAnchorRect(const QRect &p_rect) {
   const QRect area = p_rect.intersected(parentWidget()->contentsRect());
@@ -241,7 +249,7 @@ bool LinkPreviewOverlay::eventFilter(QObject *p_object, QEvent *p_event) {
     // Native QWindow delivery must reach the QWidget dispatch/grab machinery.
     return false;
   }
-  if (!isVisible() || QApplication::activeModalWidget() || QApplication::activePopupWidget()) {
+  if (!isVisible() || QApplication::activeModalWidget() || ButtonPopup::activePopupWidget()) {
     m_dismissalPressActive = false;
     return false;
   }
@@ -300,7 +308,7 @@ bool LinkPreviewOverlay::eventFilter(QObject *p_object, QEvent *p_event) {
     if (guardedSource) {
       new PreviewDismissalTail(guardedSource, position);
       if (guardedSource->isVisible() && guardedSource->isEnabled() &&
-          !QApplication::activeModalWidget() && !QApplication::activePopupWidget() &&
+          !QApplication::activeModalWidget() && !ButtonPopup::activePopupWidget() &&
           (!guardedOverlay || guardedOverlay->getViewSplit()->getViewWindowCount() == 0)) {
         guardedSource->setFocus(Qt::MouseFocusReason);
       }

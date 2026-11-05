@@ -1,5 +1,6 @@
 #include "viewarea2.h"
 
+#include <QAction>
 #include <QApplication>
 #include <QCoreApplication>
 #include <QInputDialog>
@@ -38,6 +39,7 @@
 
 #include "detachedwindow.h"
 #include "linkpreviewoverlay.h"
+#include "outlineprovider.h"
 #include "viewsplit2.h"
 #include "viewwindow2.h"
 #include "widgetviewwindow2.h"
@@ -839,6 +841,13 @@ void ViewArea2::saveSession() {
       auto windows = it.value()->getAllViewWindows();
       for (auto *win : windows) {
         QString bufferId = win->getBuffer().id();
+        // Runtime memory sources are filtered by session serialization. Keep
+        // their live workspace ownership and current selection, including when
+        // a later close prompt cancels shutdown.
+        if (win->getBuffer().isMemoryBacked()) {
+          bufferIds.append(bufferId);
+          continue;
+        }
         // Virtual buffers (vx://home, vx://settings, ...) are not restorable.
         // Explicitly REMOVE them from the workspace: setBufferOrder() alone is
         // reorder-only (vxcore re-appends any existing ID omitted from the new
@@ -865,7 +874,8 @@ void ViewArea2::saveSession() {
       auto *currentWin = it.value()->getCurrentViewWindow();
       if (currentWin) {
         const QString currentBufferId = currentWin->getBuffer().id();
-        if (!bufferSvc || !bufferSvc->isVirtualBuffer(currentBufferId)) {
+        if (currentWin->getBuffer().isMemoryBacked() || !bufferSvc ||
+            !bufferSvc->isVirtualBuffer(currentBufferId)) {
           wsSvc->setCurrentBuffer(it.key(), currentBufferId);
         }
       }
@@ -908,10 +918,73 @@ ViewSplit2 *ViewArea2::splitForWorkspace(const QString &p_workspaceId) const {
 
 bool ViewArea2::isPreviewSourceCurrent(ID p_sourceId, quint64 p_generation) const {
   const auto *source = windowForId(p_sourceId);
-  return source && source->getViewWindowId() == p_sourceId && source->isEnabled() &&
-         source->isVisible() && source->getBufferGeneration() == p_generation &&
-         source->getBuffer().isValid() && !source->getBuffer().getBuffer().isEmpty() &&
-         !source->getNodeId().isVirtual() && !source->isNoteConversionFrozen();
+  const auto *owner = source ? owningSplitForWindow(p_sourceId) : nullptr;
+  // Opening a sibling preview selects it and hides a nested source tab. That
+  // tab remains current in its visible source-bound host, not in a hidden or
+  // retired ordinary workspace.
+  const bool available =
+      source && (source->isVisible() || (owner && owner->isPreview() &&
+                                         isPreviewWorkspaceAvailable(owner->getWorkspaceId())));
+  return source && source->getViewWindowId() == p_sourceId && source->isEnabled() && available &&
+         source->getBufferGeneration() == p_generation && source->getBuffer().isValid() &&
+         !source->getBuffer().getBuffer().isEmpty() &&
+         (source->getBuffer().isMemoryBacked() || !source->getNodeId().isVirtual()) &&
+         !source->isNoteConversionFrozen();
+}
+
+bool ViewArea2::isOutlineHeadingCurrent(ID p_sourceId, quint64 p_generation, int p_headingIndex,
+                                        const QByteArray &p_fingerprint) const {
+  const auto *source = windowForId(p_sourceId);
+  auto *buffers = m_services.get<BufferService>();
+  if (!source || source->getViewWindowId() != p_sourceId ||
+      source->getBufferGeneration() != p_generation || !source->isEnabled() ||
+      source->m_bufferReplacementInProgress || source->m_noteConversionFrozen ||
+      source->m_contentReplacementFrozen || !buffers || buffers->isProtectedLocking() ||
+      !source->getBuffer().isValid() || source->getBuffer().getBuffer().isEmpty()) {
+    return false;
+  }
+  const auto provider = source->getOutlineProvider();
+  const auto outline = provider ? provider->getOutline() : QSharedPointer<Outline>();
+  return outline && p_headingIndex >= 0 && p_headingIndex < outline->m_headings.size() &&
+         !outline->m_headings[p_headingIndex].m_isPlaceholder &&
+         outline->m_headings[p_headingIndex].m_level > 0 &&
+         outline->navigationFingerprint() == p_fingerprint;
+}
+
+bool ViewArea2::navigateToOutlineHeading(ID p_sourceId, quint64 p_generation, int p_headingIndex,
+                                         const QByteArray &p_fingerprint) {
+  const QPointer<ViewArea2> self(this);
+  const QPointer<ViewWindow2> source(windowForId(p_sourceId));
+  const QPointer<ViewSplit2> owner(owningSplitForWindow(p_sourceId));
+  if (!source || !owner || source->getBufferGeneration() != p_generation) {
+    return false;
+  }
+  const QString workspace = owner->getWorkspaceId();
+  const QString bufferId = source->getBuffer().id();
+  if (owner->isPreview()) {
+    m_controller->setActivePreviewWindow(workspace, p_sourceId, bufferId);
+  }
+  if (!self || !source || !owner || source->getBufferGeneration() != p_generation ||
+      windowForId(p_sourceId) != source || owningSplitForWindow(p_sourceId) != owner) {
+    return false;
+  }
+  // Unlike the ordinary-workspace focus command, this also handles a source tab
+  // nested in a preview and an original source in a detached window.
+  setCurrentBuffer(workspace, bufferId, true);
+  if (!self || !source || !owner || windowForId(p_sourceId) != source ||
+      source->getBufferGeneration() != p_generation || source->getBuffer().id() != bufferId ||
+      owner->getCurrentViewWindow() != source) {
+    return false;
+  }
+  if (!isOutlineHeadingCurrent(p_sourceId, p_generation, p_headingIndex, p_fingerprint)) {
+    source->showMessage(tr("The outline has changed. Reopen the mind map to navigate."));
+    return false;
+  }
+  const QPointer<OutlineProvider> provider(source->getOutlineProvider().data());
+  // Each source owns its existing Read/Edit/PDF navigation policy. The receiver
+  // can retire this view synchronously; no source/provider state is read afterward.
+  emit provider->headingClicked(p_headingIndex);
+  return true;
 }
 
 ViewSplit2 *ViewArea2::hostedSplitForWorkspace(const QString &p_workspaceId) const {
@@ -1057,6 +1130,17 @@ bool ViewArea2::hostPreviewWorkspace(ID p_sourceId, quint64 p_generation,
           [this, p_workspaceId](bool p_visible) {
             m_controller->setPreviewWorkspaceVisible(p_workspaceId, p_visible);
           });
+  const auto refreshPromotion = [this, overlay, p_workspaceId] {
+    const auto *split = overlay->getViewSplit();
+    bool enabled = split->count() > 0 && m_controller->canPromotePreviewWorkspace(p_workspaceId);
+    for (int i = 0; enabled && i < split->count(); ++i) {
+      const auto *window = qobject_cast<ViewWindow2 *>(split->widget(i));
+      enabled = window && m_controller->canPromotePreviewBuffer(window->getBuffer());
+    }
+    overlay->setOpenInNewTabsEnabled(enabled);
+  };
+  connect(m_controller, &ViewAreaController::windowsChanged, overlay, refreshPromotion);
+  refreshPromotion();
   updatePreviewAnchor(p_workspaceId);
   overlay->show();
   return isPreviewWorkspaceAvailable(p_workspaceId);
@@ -1078,7 +1162,12 @@ void ViewArea2::removePreviewWorkspaceHost(const QString &p_workspaceId) {
 bool ViewArea2::closePreviewsForSources(const QVector<ID> &p_sourceIds) {
   const QPointer<ViewArea2> guard(this);
   for (const ID sourceId : p_sourceIds) {
-    const auto *source = windowForId(sourceId);
+    const QPointer<ViewWindow2> source(windowForId(sourceId));
+    const auto closeMindMaps =
+        source ? source->m_closeOutlineMindMapPreviews : std::function<bool()>();
+    if ((closeMindMaps && !closeMindMaps()) || !guard) {
+      return false;
+    }
     const auto closePreview = source ? source->m_closeLinkPreview : std::function<bool()>();
     if (closePreview && !closePreview()) {
       return false;
@@ -1383,6 +1472,54 @@ void ViewArea2::maximizeViewSplit(const QString &p_workspaceId) {
 
 void ViewArea2::distributeViewSplits() { distributeViewSplitWidgets(); }
 
+void ViewArea2::wireOutlineMindMapSignals(ViewWindow2 *p_window) {
+  p_window->m_isOutlineMindMapPreview =
+      m_controller->isOutlineMindMapPreview(p_window->getBuffer());
+  p_window->m_isProtectedOutlineMindMapPreview =
+      m_controller->isProtectedOutlineMindMapPreview(p_window->getBuffer());
+  if (p_window->m_isProtectedOutlineMindMapPreview && p_window->m_printAction) {
+    p_window->m_printAction->setEnabled(false);
+  }
+  const QPointer<ViewArea2> self(this);
+  const QPointer<ViewWindow2> window(p_window);
+  p_window->m_closeOutlineMindMapPreviews = [self, window] {
+    return !self || !window ||
+           self->m_controller->closeOutlineMindMapPreviews(window->getViewWindowId());
+  };
+  if (p_window->m_isOutlineMindMapPreview) {
+    connect(p_window, &ViewWindow2::outlineMindMapNodeRequested, this,
+            [self, window](const QString &p_nodeId) {
+              if (!self || !window) {
+                return;
+              }
+              const Buffer2 snapshot = window->getBuffer();
+              QString error;
+              if (!self->m_controller->activateOutlineMindMapNode(snapshot, p_nodeId, &error) &&
+                  self && window && window->isVisible() && !error.isEmpty()) {
+                window->showMessage(error);
+              }
+            });
+  }
+  connect(p_window, &ViewWindow2::outlineMindMapRequested, this, [self, window] {
+    if (!self || !window) {
+      return;
+    }
+    const ID id = window->getViewWindowId();
+    const auto generation = window->getBufferGeneration();
+    const auto provider = window->getOutlineProvider();
+    const Outline outline =
+        provider && provider->getOutline() ? *provider->getOutline() : Outline();
+    const int currentHeading = provider ? provider->getCurrentHeadingIndex() : -1;
+    const Buffer2 source = window->getBuffer();
+    QString error;
+    if (!self->m_controller->openOutlineMindMapPreview(source, outline, id, generation,
+                                                       currentHeading, &error) &&
+        self && window && self->isPreviewSourceCurrent(id, generation)) {
+      window->showMessage(error);
+    }
+  });
+}
+
 void ViewArea2::openBuffer(const Buffer2 &p_buffer, const QString &p_fileType,
                            const QString &p_workspaceId, const FileOpenSettings &p_settings) {
   const ID homeId = splitForWorkspace(p_workspaceId) ? loneHomeWindowId() : 0;
@@ -1427,6 +1564,7 @@ void ViewArea2::openBuffer(const Buffer2 &p_buffer, const QString &p_fileType,
       emit viewWindowCreationFailed(p_fileType, p_buffer.nodeId().relativePath);
       return;
     }
+    wireOutlineMindMapSignals(win);
     id = m_nextWindowId++;
     m_windows[id] = win;
     win->setViewWindowId(id);
@@ -1594,6 +1732,7 @@ bool ViewArea2::recreateNoteViews(
       }
       return false;
     }
+    wireOutlineMindMapSignals(newWindow);
     newWindow->setNoteConversionFrozen(true);
     newWindow->setAutoReload(oldWindow->autoReload());
     replacements.append({id, oldWindow, newWindow, owner, oldWindow->capturePositionState()});
@@ -1698,7 +1837,7 @@ bool ViewArea2::closeViewWindow(ID p_windowId, bool p_force) {
       detached->deleteLater();
     }
   };
-  if (win->getBuffer().isEncrypted()) {
+  if (win->isContentProtected() || win->isOutlineMindMapPreview()) {
     connect(win, &QObject::destroyed, this, finishClose);
     win->deleteLater();
   } else {

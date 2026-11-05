@@ -44,6 +44,7 @@ class FloatingWidget;
 class OutlineProvider;
 class CommentProvider;
 class ServiceLocator;
+class StatusOverlay;
 class StatusWidget;
 class FindAndReplaceWidget2;
 
@@ -56,7 +57,7 @@ class FindAndReplaceWidget2;
 //   [top widgets]      ← addTopWidget()
 //   [central widget]   ← setCentralWidget() (stretch=1)
 //   [bottom widgets]   ← addBottomWidget()
-// Status widgets float over the bottom of the central content, outside these slots.
+// Persistent status reserves the first bottom row; temporary-only messages overlay content.
 //
 // Usage:
 //   class MarkdownViewWindow2 : public ViewWindow2 {
@@ -92,6 +93,10 @@ public:
   void setFileType(const QString &p_fileType) { m_fileType = p_fileType; }
   virtual bool supportsBufferReplacement() const { return false; }
   bool replaceBuffer(const Buffer2 &p_buffer, const FileOpenSettings &p_settings);
+  bool isOutlineMindMapPreview() const { return m_isOutlineMindMapPreview; }
+  bool isContentProtected() const {
+    return m_buffer.isEncrypted() || m_isProtectedOutlineMindMapPreview;
+  }
 
   // Public accessor for the current selection (used by task context to resolve
   // ${selectedText}). Delegates to the protected virtual selectedText().
@@ -278,8 +283,11 @@ public:
   void setAutoReload(bool p_enabled);
   bool autoReload() const;
 
-  // Preserve ordinary open policy, adding source-bound preview intent for direct links.
+  // Context links open in new tabs; direct links retain source-bound preview intent.
   FileOpenSettings getLinkOpenSettings(bool p_fromContextMenu = false) const;
+  // Explicit source-bound previews bypass the direct-link preference. An unbound
+  // window returns default settings; callers must reject its zero source ID.
+  FileOpenSettings getPreviewOpenSettings() const;
 
 public slots:
   void findNext(const QString &p_text, FindOptions p_options);
@@ -325,6 +333,9 @@ public slots:
   void reinterpretWithEncoding(const QString &p_codecName);
 
 signals:
+  void outlineMindMapRequested();
+  void outlineMindMapNodeRequested(const QString &p_nodeId);
+
   // The destination split's hosting policy is ready before the view is shown.
   void detachedChanged(bool p_detached);
 
@@ -469,13 +480,16 @@ protected:
   // Add a widget below the central widget.
   void addBottomWidget(QWidget *p_widget);
 
-  // Float the status widget over the bottom of the content. Takes shared ownership.
+  // Reserve a row for permanent controls; overlay message-only status. Takes shared ownership.
   void setStatusWidget(const QSharedPointer<StatusWidget> &p_widget);
 
   // Register the column-based status bar for this window. Call once in a
   // subclass constructor. An empty def is a no-op (no bar created). A non-empty
-  // def creates a StatusBar floating over the bottom of the content.
+  // def creates a StatusBar in a reserved row below the content.
   void setStatusBarDef(const StatusBarDef &p_def);
+
+  // Read-mode messages overlay content; Edit keeps its permanent status row.
+  void setStatusBarFixed(bool p_fixed);
 
   // Access the column-based status bar (nullptr if none registered).
   StatusBar *statusBar() const { return m_statusBar; }
@@ -728,6 +742,9 @@ private:
   quint64 m_bufferGeneration = 0;
   // Installed only while this source owns a preview; normal close remains cancellable.
   std::function<bool()> m_closeLinkPreview;
+  std::function<bool()> m_closeOutlineMindMapPreviews;
+  bool m_isOutlineMindMapPreview = false;
+  bool m_isProtectedOutlineMindMapPreview = false;
   // Narrow ancestor scopes, not action enablement, while a nested editor owns focus.
   QVector<QPointer<QShortcut>> m_previewScopedShortcuts;
 
@@ -739,7 +756,7 @@ private:
   // Managed by QObject.
   QVBoxLayout *m_topLayout = nullptr;
 
-  // Bottom layout: bottom widgets only; status overlays never reserve a row.
+  // Bottom layout: fixed status first, then other bottom widgets.
   // Managed by QObject.
   QVBoxLayout *m_bottomLayout = nullptr;
 
@@ -765,6 +782,8 @@ private:
   // Column-based status bar (phase 1 infra). Managed by QObject. nullptr until
   // a subclass registers a non-empty StatusBarDef via setStatusBarDef.
   StatusBar *m_statusBar = nullptr;
+  // Owned by m_statusBar.
+  StatusOverlay *m_statusBarOverlay = nullptr;
 
   // Find and replace widget. Managed by QObject.
   FindAndReplaceWidget2 *m_findAndReplace = nullptr;
