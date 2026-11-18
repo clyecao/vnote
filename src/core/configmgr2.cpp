@@ -34,7 +34,7 @@ constexpr int kWriteIntervalMs = 500;
 constexpr char kMainConfigFileBaseName[] = "vnotex";
 constexpr char kSessionFileBaseName[] = "session";
 
-const QVersionNumber ConfigMgr2::c_version{0, 1, 1};
+const QVersionNumber ConfigMgr2::c_version{0, 1, 2};
 
 const QString ConfigMgr2::c_orgName = QStringLiteral("VNoteX");
 
