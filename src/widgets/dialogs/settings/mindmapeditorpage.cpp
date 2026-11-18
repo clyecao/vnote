@@ -27,6 +27,19 @@ MindMapEditorPage::MindMapEditorPage(ServiceLocator &p_services, QWidget *p_pare
 
 void MindMapEditorPage::setupUI() {
   auto *mainLayout = new QVBoxLayout(this);
+
+  auto *viewLayout = SettingsPageHelper::addSection(
+      mainLayout, tr("Editor Toolbar Options"), tr("Options in the toolbar of the editor"), this);
+  const auto addViewHint = [this, viewLayout](const QString &p_label,
+                                              const QString &p_description) {
+    auto *row = SettingsPageHelper::createSettingRow(p_label, p_description, nullptr, this);
+    viewLayout->addWidget(row);
+    addSearchItem(p_label, p_description,
+                  row->findChild<QLabel *>(QString(), Qt::FindDirectChildrenOnly));
+  };
+  addViewHint(tr("Layout"),
+              tr("Choose a Balanced, Right, Left or Outline layout for the mind map"));
+
   auto *style = SettingsPageHelper::addSection(mainLayout, tr("Style"), QString(), this);
   {
     m_fontFamily = WidgetsFactory::createLineEdit(this);

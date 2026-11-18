@@ -63,6 +63,43 @@ Coverage: `tests/widgets/test_viewarea_tab_reuse.cpp` exercises real services an
 windows, destination precedence, batch boundaries, duplicates, background opens,
 main-tab reuse, unavailable targets, ownership cleanup and reentrant opens.
 
+Explicit CLI modes additionally set `FileOpenSettings::m_useInternalViewer`, propagated through
+`FileOpenEvent::useInternalViewer` and QVariant maps. This independently bypasses external-program
+and unsupported-type system dispatch, avoiding Explorer association recursion. Unsupported types
+report the normal view-creation failure and close only unowned buffers. Do not infer this routing
+from `m_forceMode`: existing force-mode callers retain normal external precedence. Duplicate
+windows apply forced mode through guarded `setMode()` before navigation; drafts and each viewer's
+supported modes remain authoritative. Detached focus never chooses the main-window destination.
+
+## Windows Explorer context menu
+
+`WindowsContextMenuController` is application-owned and registered in the supplied `ServiceLocator`;
+transient File Associations pages share its busy state and result. The controller starts only
+`windows-context-menu.ps1` beside the running executable, using resolved system Windows PowerShell
+with separate `-NoProfile -NonInteractive -ExecutionPolicy Bypass -File` arguments. Never elevate,
+search PATH for helpers, construct shell code, or change global execution policy. Page closure must
+not kill registration; application shutdown allows a bounded grace period before reaping the helper.
+
+On Add, the controller reads the applied `FileTypeCoreService::getAllFileTypes()` list (including
+its projected Image default), excludes Others, and passes normalized/deduplicated suffixes as one
+semicolon-separated `-Suffixes` argument. Reject invalid individual values, including embedded
+semicolons, before joining or starting PowerShell. A failed type lookup is an error; a valid empty
+suffix set clears registration. Unsaved page edits and external-program suffixes are not inputs.
+
+`scripts/windows-context-menu.ps1 -Action Add|Remove [-VNotePath <exe>]` owns only the two verbs
+`VNote.Read` and `VNote.Edit` below
+`HKCU\Software\Classes\SystemFileAssociations\.<suffix>\shell`. Add requires `-Suffixes 'md;txt'`
+(or an explicit empty string), validates all suffixes and the executable before writes, quotes the
+absolute executable and `"%1"`, and places `--` before the filename. No fallback registers all files.
+Add reconciles stale extension entries and removes the old literal `Classes\*\shell` verbs.
+Remove enumerates existing dot-extension keys and removes these same two verbs plus legacy wildcard
+entries, without needing the current configuration, a suffix list, or the executable. Use .NET
+registry APIs, not wildcard-aware provider paths. Preserve other verbs, extension metadata and
+system/default ProgIDs. Changes are not transactional; retry Add/Remove after interruption.
+After applying suffix edits or moving a portable install, use Add again to refresh registration.
+`src/CMakeLists.txt` refreshes the helper beside development executables and installs it beside
+packaged Windows executables. No application/session configuration or migration is involved.
+
 ## Node Mark menus
 
 `NotebookNodeController` builds **Mark → Text / Background** for bundled nodes in
@@ -110,13 +147,24 @@ read-only with respect to the installation and fetch no release assets. `UpdateS
 dependency. Full check contract:
 [`../core/services/AGENTS.md` § Update Check](../core/services/AGENTS.md#update-check).
 
-Only explicit activation of Windows' `Update Now` notification action may start the deployed
-external PowerShell updater. Keep `Check Release` first, the existing manual-check dialog
-unchanged, and `m_dismissOnTrigger=false` on the new action. Preserve attention, persistence,
-throttle/skip and supersession behavior; stale/dismissed/evicted offer callbacks cannot
-launch. Allow one active attempt, and retire failures/cancellations so explicit retry works.
-Launch failures are interrupting Warning notifications in category `update`, key
-`update.install`, retaining the release-page fallback.
+Only explicit activation of Windows' `Update Now` action from the startup notification or
+manual-check dialog may start the deployed external PowerShell updater. Keep `Check Release`
+first and `m_dismissOnTrigger=false` on the notification action, and `Open Release Page`
+available in the dialog. Preserve attention, persistence, throttle/skip and supersession
+behavior; stale/dismissed/evicted offer callbacks cannot launch. Allow one active attempt,
+and retire failures/cancellations so explicit retry works. Launch failures are interrupting
+Warning notifications in category `update`, key `update.install`, retaining the release-page
+fallback.
+
+The manual dialog emits `updateRequested()`; the controller captures its immutable offered
+`UpdateInfo` and requires the current visible dialog with no check in flight. If a helper
+attempt already exists, keep the dialog open with `setUpdateInProgress()` feedback rather
+than silently consuming the click. Otherwise accept the dialog (deferred `WA_DeleteOnClose`
+deletion) before calling the same `startScriptUpdate()` used by notifications, so launch
+failure notifications remain accessible. Manual retry starts with another explicit check.
+Only an accepted new check closes/clears an older manual offer; dropped checks preserve it.
+Clear the tracked dialog immediately so a later check failure cannot target a hidden view.
+No config/default changes or migration are needed.
 
 Snapshot `CoreConfig::getUpdateSource()` on activation using the existing source converters;
 absent config normalizes to Gitee. Pass the immutable offered version, never a newly
@@ -138,9 +186,10 @@ explicit response in that call stack, never block the GUI, and retain an accepte
 through teardown. EOF, timeout or cancellation never authorizes installation. The helper must
 wait on the retained original process handle through save/sync drains without force-killing.
 
-The external process alone owns signed full-package authentication, preservation of portable
-`config` and unowned files, clone/overlay/swap with complete recovery backup, and same-token
-relaunch. Protected installations fail with manual-update guidance, not UAC/ACL changes.
+The external process alone owns signed full-package verification or eligible-delta reconstruction,
+preservation of portable `config` and unowned files, clone/overlay/swap with complete recovery backup,
+and same-token relaunch. Protected installations fail with manual-update guidance,
+not UAC/ACL changes.
 [../../docs/update-signing.md](../../docs/update-signing.md) owns that contract.
 
 ## Native Typst runtime and image cleanup
@@ -243,6 +292,47 @@ image-only ATX headings still have content. Users can pause after `#` or a parag
 following `-` and continue typing `#abc` or `- item` without an inserted number.
 The result stays index-aligned with the parsed headings. This is an editor source-writing
 policy only; Markdown parsing and read-mode/outline numbering are unchanged.
+
+## Outline Reordering
+
+`OutlineController` retains the full `OutlineMove` and its `Outline` snapshot until confirmation;
+provider replacement, outline publication or permission changes retire that intent. Both the view
+and controller use `Outline::planMove()` rather than separate format-specific placement rules.
+An insertion anchor of -1 means append under the explicit parent, not necessarily document root.
+
+`OutlineSectionEditor` owns the shared QTextDocument section move, marker rewriting and position
+mapping. Markdown accepts ATX/Setext through level six; Typst accepts AST-proven top-level `=`
+headings at positive depths. The caller must supply complete, current source boundaries; marker
+validation alone does not establish Typst syntax context. All changes form one edit block and
+cursor/selection restoration happens afterward. Ordinary native mind maps use their own atomic
+history command. Source-linked previews pair that native command with this same text mover through
+the guarded source adapter; never diff serialized map JSON or roll back after publication.
+
+`renameHeading()` and `insertHeading()` share that snapshot validation and return source-heading
+positions in input order (placeholders remain -1; insertion appends its new marker position).
+Reordering computes this vector only when explicitly requested. All fallible range/size and
+UTF-16 validation precedes a single source undo group. Topics are single-line literal display
+text: Markdown uses numeric references for punctuation and edge whitespace; Typst uses a string
+expression. Renames replace title syntax, not section prose; empty Setext titles become ATX.
+Typst body/label/comment ranges must come from the compiler AST, never regex discovery. Insertion
+requires the complete heading roster, validates the requested parent at the insertion boundary,
+and retains preamble and existing section bodies.
+
+Setext parser spans can include the following blank/prose line. Locate the certified underline
+inside that span and bound title/marker replacements to it; preserve the tail and blank separation
+when relocating a Setext section. Raw overlapping snapshots remain unsupported, rather than being
+silently trimmed. ATX list delimiters stay literal so existing source numbering recognizes them;
+Setext titles also escape block punctuation. Typst protected slices concatenate without added
+visible spaces, retaining required original line boundaries around comments.
+
+`ViewAreaController` owns the metadata-only outline-map binding, not documents. Resolve native
+placements with `Outline::planMove()`, prepare before/after ID mappings and history closures before
+source write, and keep in-flight state until native publication. Approval is separate and view-owned;
+release protected leases before a modal and revalidate afterward. Settlement checks the receipt's
+exact text generation and tracked source markers before advancing fingerprint/revision/topics.
+Independent source edits revoke mutation authorization; native history may only replay its exact
+still-current source group. A generated cache revision never authorizes replacing the projection.
+See [source-bound preview contracts](../widgets/AGENTS.md#outline-mind-map-snapshots).
 
 ## NotificationRouter
 

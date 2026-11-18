@@ -24,7 +24,7 @@
         <translation>将日志输出到标准错误。</translation>
     </message>
     <message>
-        <location line="+4"/>
+        <location line="+5"/>
         <source>Suppress non-critical console logs.</source>
         <translation>隐藏非关键控制台日志。</translation>
     </message>
@@ -39,7 +39,7 @@
         <translation>在独立的分屏中打开文件。</translation>
     </message>
     <message>
-        <location line="+8"/>
+        <location line="+18"/>
         <source>WebEngine remote debugging port.</source>
         <translation>WebEngine 远程调试端口。</translation>
     </message>
@@ -49,12 +49,12 @@
         <translation>端口号</translation>
     </message>
     <message>
-        <location line="+5"/>
+        <location line="+6"/>
         <source>WebEngine without sandbox.</source>
         <translation>禁用 WebEngine 沙箱。</translation>
     </message>
     <message>
-        <location line="+5"/>
+        <location line="+6"/>
         <source>WebEngine with GPU disabled.</source>
         <translation>禁用 WebEngine GPU 加速。</translation>
     </message>
@@ -62,6 +62,21 @@
         <location line="+7"/>
         <source>Skip the single-instance lock and IPC (testing only). Use separate config and notebooks.</source>
         <translation>跳过单实例锁和进程间通信（仅用于测试）。请使用独立的配置和笔记本。</translation>
+    </message>
+    <message>
+        <location line="-33"/>
+        <source>Open files in Read mode in VNote.</source>
+        <translation>在 VNote 中以阅读模式打开文件。</translation>
+    </message>
+    <message>
+        <location line="+5"/>
+        <source>Open files in Edit mode in VNote.</source>
+        <translation>在 VNote 中以编辑模式打开文件。</translation>
+    </message>
+    <message>
+        <location line="+49"/>
+        <source>The --read-mode and --edit-mode options cannot be used together.</source>
+        <translation>--read-mode 和 --edit-mode 选项不能同时使用。</translation>
     </message>
 </context>
 <context>
@@ -161,7 +176,7 @@
 <context>
     <name>LockedNoteView</name>
     <message>
-        <location filename="../../../widgets/viewarea2.cpp" line="+61"/>
+        <location filename="../../../widgets/viewarea2.cpp" line="+64"/>
         <source>This note is locked. Unlock it to read its contents.</source>
         <translation>此笔记已锁定。解锁后即可阅读其内容。</translation>
     </message>
@@ -185,9 +200,45 @@
     </message>
 </context>
 <context>
+    <name>MainWindowTaskContext</name>
+    <message>
+        <location filename="../../../widgets/mainwindowtaskcontext.cpp" line="+51"/>
+        <source>Trust Notebook</source>
+        <translation>信任笔记本</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Do you trust the notebook &quot;%1&quot;?</source>
+        <translation>您信任笔记本“%1”吗？</translation>
+    </message>
+    <message>
+        <location line="+5"/>
+        <source>Notebook tasks can execute commands on your computer. Only trust notebooks from sources you trust.
+
+Location: %1
+
+Trust is remembered until you close this notebook.</source>
+        <translation>笔记本任务可以在您的计算机上执行命令。请仅信任来自可信来源的笔记本。
+
+位置：%1
+
+信任状态将保留到您关闭此笔记本为止。</translation>
+    </message>
+    <message>
+        <location line="+7"/>
+        <source>Trust and Run</source>
+        <translation>信任并运行</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>Cancel</source>
+        <translation>取消</translation>
+    </message>
+</context>
+<context>
     <name>MessageBoxHelper</name>
     <message>
-        <location line="-51"/>
+        <location filename="../../../widgets/messageboxhelper.cpp" line="-51"/>
         <source>Never Ask</source>
         <translation>不再询问</translation>
     </message>
@@ -242,7 +293,7 @@
     </message>
     <message>
         <location line="+6"/>
-        <location filename="../../../widgets/mindmapviewwindow2.cpp" line="+194"/>
+        <location filename="../../../widgets/mindmapviewwindow2.cpp" line="+304"/>
         <source>E&amp;xport</source>
         <translation>导出(&amp;X)</translation>
     </message>
@@ -262,7 +313,7 @@
         <translation>交叉复制</translation>
     </message>
     <message>
-        <location filename="../../../controllers/newnotebookcontroller.cpp" line="+208"/>
+        <location filename="../../../controllers/newnotebookcontroller.cpp" line="+212"/>
         <source>Setting up sync</source>
         <translation>正在配置同步</translation>
     </message>
@@ -413,52 +464,40 @@
     </message>
     <message>
         <location line="+7"/>
-        <location line="+1"/>
         <source>Mind Map</source>
         <translation>思维导图</translation>
     </message>
     <message>
-        <location line="+85"/>
+        <location filename="../../../widgets/dialogs/settings/editorpage.cpp" line="+48"/>
+        <location filename="../../../widgets/viewwindowtoolbarhelper2.cpp" line="+86"/>
         <source>Readable Width</source>
         <translation>易读宽度</translation>
     </message>
     <message>
-        <location line="+13"/>
+        <location filename="../../../widgets/dialogs/settings/markdowneditorpage.cpp" line="+55"/>
+        <location filename="../../../widgets/viewwindowtoolbarhelper2.cpp" line="+13"/>
         <source>Live Preview</source>
         <translation>实时预览</translation>
     </message>
     <message>
-        <location line="+13"/>
+        <location line="+3"/>
+        <location filename="../../../widgets/viewwindowtoolbarhelper2.cpp" line="+13"/>
         <source>In-Place Preview</source>
         <translation>原地预览</translation>
     </message>
     <message>
-        <location line="+6"/>
-        <source>Conceal long link destinations</source>
-        <translation>省略显示较长的链接目标</translation>
+        <location line="+5"/>
+        <location filename="../../../widgets/viewwindowtoolbarhelper2.cpp" line="+6"/>
+        <source>Markers Concealment</source>
+        <translation>标记隐藏</translation>
     </message>
     <message>
-        <location line="+2"/>
-        <source>Shorten long image, link, and reference destinations without changing the Markdown source. Hover to see the full destination</source>
-        <translation>缩略显示较长的图片、链接和引用目标，不修改 Markdown 源文本。悬停可查看完整目标</translation>
-    </message>
-    <message>
-        <location line="+7"/>
-        <source>Conceal Markdown Markers</source>
-        <translation>隐藏 Markdown 标记</translation>
-    </message>
-    <message>
-        <location line="+2"/>
-        <source>Hide Markdown formatting markers without changing the source; move the caret into an element to reveal them</source>
-        <translation>在不修改源文本的情况下隐藏 Markdown 格式标记；将光标移入相应元素即可显示标记</translation>
-    </message>
-    <message>
-        <location line="+8"/>
+        <location filename="../../../widgets/viewwindowtoolbarhelper2.cpp" line="+7"/>
         <source>Allow Auto Section Number</source>
         <translation>允许自动章节编号</translation>
     </message>
     <message>
-        <location line="-129"/>
+        <location line="-117"/>
         <source>Outline</source>
         <translation>大纲</translation>
     </message>
@@ -473,7 +512,7 @@
         <translation>附件</translation>
     </message>
     <message>
-        <location line="+108"/>
+        <location line="+96"/>
         <source>Image Host</source>
         <translation>图床</translation>
     </message>
@@ -935,7 +974,7 @@
         <translation>无法在目标位置创建包文件夹。</translation>
     </message>
     <message>
-        <location filename="../../../widgets/viewwindowtoolbarhelper2.cpp" line="-101"/>
+        <location filename="../../../widgets/viewwindowtoolbarhelper2.cpp" line="-89"/>
         <source>Menu</source>
         <translation>菜单</translation>
     </message>
@@ -950,7 +989,7 @@
         <translation>重做</translation>
     </message>
     <message>
-        <location filename="../../../widgets/viewwindow2.cpp" line="+84"/>
+        <location filename="../../../widgets/viewwindow2.cpp" line="+82"/>
         <source>Discard Changes</source>
         <translation>放弃更改</translation>
     </message>
@@ -1132,7 +1171,7 @@
 <context>
     <name>m3::qt::NodePropertiesPanel</name>
     <message>
-        <location filename="../../../widgets/mindmapviewwindow2.cpp" line="-127"/>
+        <location filename="../../../widgets/mindmapviewwindow2.cpp" line="-236"/>
         <source>Node Properties</source>
         <translation>节点属性</translation>
     </message>
@@ -1224,13 +1263,13 @@
     </message>
     <message>
         <location line="+20"/>
-        <location line="+16"/>
+        <location line="+17"/>
         <source>Dock widgets kept when expanding content area</source>
         <translation>扩展内容区时保留的停靠窗口</translation>
     </message>
     <message>
-        <location line="-59"/>
-        <location line="+116"/>
+        <location line="-60"/>
+        <location line="+117"/>
         <source>Appearance</source>
         <translation>外观</translation>
     </message>
@@ -1238,7 +1277,7 @@
 <context>
     <name>vnotex::Application</name>
     <message>
-        <location filename="../../../application.h" line="+51"/>
+        <location filename="../../../application.h" line="+54"/>
         <source>Select some text to create a note in VNote.</source>
         <translation>选择一些文本以在 VNote 中创建笔记。</translation>
     </message>
@@ -1380,7 +1419,7 @@
 <context>
     <name>vnotex::BufferService</name>
     <message>
-        <location filename="../../../core/services/bufferservice.cpp" line="+2935"/>
+        <location filename="../../../core/services/bufferservice.cpp" line="+3120"/>
         <source>The note is no longer open.</source>
         <translation>该笔记已不再打开。</translation>
     </message>
@@ -1419,23 +1458,28 @@
         <translation>保存已打开的笔记已取消。</translation>
     </message>
     <message>
-        <location line="-2856"/>
-        <location line="+259"/>
-        <location line="+211"/>
-        <location line="+121"/>
-        <location line="+67"/>
-        <location line="+43"/>
+        <location line="-3036"/>
+        <location line="+306"/>
+        <location line="+241"/>
+        <location line="+164"/>
+        <location line="+74"/>
+        <location line="+49"/>
         <source>Replacement was cancelled.</source>
         <translation>替换已取消。</translation>
     </message>
     <message>
-        <location line="-695"/>
+        <location line="-828"/>
         <location line="+5"/>
         <source>The note cannot be read or exceeds the search size limit.</source>
         <translation>无法读取笔记，或笔记超出搜索大小限制。</translation>
     </message>
     <message>
-        <location line="+21"/>
+        <location line="+6"/>
+        <source>The saved note has changed.</source>
+        <translation>已保存的笔记已发生变化。</translation>
+    </message>
+    <message>
+        <location line="+20"/>
         <source>The note has a binary or non-round-trippable encoding.</source>
         <translation>笔记为二进制内容，或其编码无法无损往返转换。</translation>
     </message>
@@ -1445,27 +1489,48 @@
         <translation>无法替换二进制内容。</translation>
     </message>
     <message>
-        <location line="+8"/>
-        <location line="+511"/>
-        <location line="+85"/>
+        <location line="+11"/>
+        <source>The note has unsaved editor changes.</source>
+        <translation>笔记在编辑器中有未保存的修改。</translation>
+    </message>
+    <message>
+        <location line="+11"/>
+        <source>Mixed line endings cannot be replaced externally.</source>
+        <translation>无法从外部替换使用混合换行符的内容。</translation>
+    </message>
+    <message>
+        <location line="+16"/>
+        <location line="+586"/>
+        <location line="+101"/>
         <source>Could not prepare the replacement.</source>
         <translation>无法准备替换操作。</translation>
     </message>
     <message>
-        <location line="-180"/>
+        <location line="-229"/>
         <source>Replacement is available only for Simple search results.</source>
         <translation>仅支持替换简单搜索结果。</translation>
     </message>
     <message>
-        <location line="+13"/>
-        <location line="+25"/>
+        <location line="+14"/>
+        <location line="+36"/>
         <source>The search target is not an available notebook file.</source>
         <translation>搜索目标不是笔记本中可用的文件。</translation>
     </message>
     <message>
-        <location line="-18"/>
+        <location line="-29"/>
         <source>The search target has moved or is no longer available.</source>
         <translation>搜索目标已移动或不再可用。</translation>
+    </message>
+    <message>
+        <location line="+5"/>
+        <location line="+285"/>
+        <source>The operation is no longer authorized.</source>
+        <translation>此操作的授权已失效。</translation>
+    </message>
+    <message>
+        <location line="-279"/>
+        <source>The notebook is busy.</source>
+        <translation>笔记本正忙。</translation>
     </message>
     <message>
         <location line="+8"/>
@@ -1474,11 +1539,21 @@
     </message>
     <message>
         <location line="+15"/>
-        <source>Protected notes cannot be replaced from search results.</source>
-        <translation>无法通过搜索结果替换受保护笔记的内容。</translation>
+        <source>Protected notes cannot be replaced.</source>
+        <translation>无法替换受保护的笔记。</translation>
     </message>
     <message>
-        <location line="+8"/>
+        <location line="+12"/>
+        <source>The note path is unavailable.</source>
+        <translation>笔记路径不可用。</translation>
+    </message>
+    <message>
+        <location line="+6"/>
+        <source>Linked note paths are unavailable.</source>
+        <translation>包含文件系统链接的笔记路径不可用。</translation>
+    </message>
+    <message>
+        <location line="+6"/>
         <source>The note is missing, read-only, or exceeds the search size limit.</source>
         <translation>笔记不存在、为只读或超出搜索大小限制。</translation>
     </message>
@@ -1493,7 +1568,12 @@
         <translation>笔记不可用、受保护、为只读或已在替换中。</translation>
     </message>
     <message>
-        <location line="+59"/>
+        <location line="+7"/>
+        <source>The note has unsaved changes.</source>
+        <translation>笔记有未保存的修改。</translation>
+    </message>
+    <message>
+        <location line="+67"/>
         <source>The note is still being saved. Try again in a moment.</source>
         <translation>笔记仍在保存中，请稍后重试。</translation>
     </message>
@@ -1509,29 +1589,34 @@
     </message>
     <message>
         <location line="+10"/>
-        <location line="+49"/>
-        <location line="+38"/>
+        <location line="+57"/>
+        <location line="+54"/>
         <source>The note changed while preparing the replacement.</source>
         <translation>准备替换期间笔记发生变化。</translation>
     </message>
     <message>
-        <location line="-80"/>
+        <location line="-104"/>
         <source>Could not capture the current note content.</source>
         <translation>无法获取笔记的当前内容。</translation>
     </message>
     <message>
-        <location line="+59"/>
+        <location line="+67"/>
         <location line="+5"/>
         <source>The replacement cannot be represented in the note&apos;s encoding.</source>
         <translation>替换内容无法用笔记的编码表示。</translation>
     </message>
     <message>
-        <location line="+8"/>
+        <location line="+11"/>
         <source>Saving the replacement was cancelled.</source>
         <translation>保存替换结果已取消。</translation>
     </message>
     <message>
-        <location line="+20"/>
+        <location line="+15"/>
+        <source>A save hook changed the guarded note content.</source>
+        <translation>保存钩子修改了受防护的笔记内容。</translation>
+    </message>
+    <message>
+        <location line="+23"/>
         <source>The replacement could not be queued. Try again in a moment.</source>
         <translation>无法将替换操作加入队列，请稍后重试。</translation>
     </message>
@@ -1541,22 +1626,27 @@
         <translation>无法保存替换结果。</translation>
     </message>
     <message>
-        <location line="+44"/>
+        <location line="+51"/>
         <source>An editor could not refresh after replacement.</source>
         <translation>替换后有编辑器无法刷新。</translation>
     </message>
     <message>
-        <location line="+15"/>
+        <location line="+22"/>
         <source>The note was saved, but an after-save hook failed.</source>
         <translation>笔记已保存，但保存后钩子执行失败。</translation>
     </message>
     <message>
-        <location line="+10"/>
+        <location line="+11"/>
         <source>Replacement edits remain unsaved: %1</source>
         <translation>替换所做的修改仍未保存：%1</translation>
     </message>
     <message>
-        <location line="+1959"/>
+        <location line="+12"/>
+        <source>The note operation did not complete cleanly; inspect its saved and committed status.</source>
+        <translation>笔记操作未正常完成；请检查其保存和提交状态。</translation>
+    </message>
+    <message>
+        <location line="+1963"/>
         <source>The note is being replaced.</source>
         <translation>笔记正在替换中。</translation>
     </message>
@@ -1639,7 +1729,7 @@
 <context>
     <name>vnotex::CommentService</name>
     <message>
-        <location filename="../../../core/services/commentservice.cpp" line="+286"/>
+        <location filename="../../../core/services/commentservice.cpp" line="+285"/>
         <location line="+101"/>
         <location line="+4"/>
         <source>Cannot locate the comment store for this file.</source>
@@ -1865,7 +1955,7 @@
 <context>
     <name>vnotex::EditorPage</name>
     <message>
-        <location filename="../../../widgets/dialogs/settings/editorpage.cpp" line="+84"/>
+        <location filename="../../../widgets/dialogs/settings/editorpage.cpp" line="+64"/>
         <source>Default image format</source>
         <translation>默认图片格式</translation>
     </message>
@@ -1897,7 +1987,52 @@
         <translation>自动保存</translation>
     </message>
     <message>
+        <location line="-32"/>
+        <source>Editor Toolbar Options</source>
+        <translation>编辑器工具栏选项</translation>
+    </message>
+    <message>
+        <location line="+0"/>
+        <source>Options in the toolbar of the editor</source>
+        <translation>编辑器工具栏中的选项</translation>
+    </message>
+    <message>
+        <location line="+8"/>
+        <source>Center the content in a readable-width area</source>
+        <translation>将内容居中显示在宽度适合阅读的区域内</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>PDF view window</source>
+        <translation>PDF 查看窗口</translation>
+    </message>
+    <message>
         <location line="+1"/>
+        <source>Cursor chooses text selection or hand panning, Scroll Mode controls page flow, and Spread Mode arranges facing pages</source>
+        <translation>光标用于选择文本选择或手形拖动，滚动模式控制页面滚动方式，跨页模式设置对开页面的排列方式</translation>
+    </message>
+    <message>
+        <location line="+4"/>
+        <source>Typst previews</source>
+        <translation>Typst 预览</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>In Edit mode, Live Preview shows the compiled PDF beside the source and In-Place Preview shows previews inside the source editor (toggle them independently)</source>
+        <translation>在编辑模式下，实时预览在源码旁显示编译后的 PDF，原地预览在源码编辑器内显示预览（两者可独立开关）</translation>
+    </message>
+    <message>
+        <location line="+4"/>
+        <source>Typst preview colors</source>
+        <translation>Typst 预览颜色</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Theme Style in Preview uses theme colors for the default page background and text (explicit document styles take precedence and exports are unchanged)</source>
+        <translation>预览中的主题样式使用主题颜色作为默认页面背景和文本颜色（文档中显式指定的样式优先，导出内容不受影响）</translation>
+    </message>
+    <message>
+        <location line="+11"/>
         <source>Backup file</source>
         <translation>备份文件</translation>
     </message>
@@ -1967,7 +2102,7 @@
         <translation>工具栏图标大小</translation>
     </message>
     <message>
-        <location line="+15"/>
+        <location line="+16"/>
         <source>Default dictionary used for spell check</source>
         <translation>拼写检查默认词典</translation>
     </message>
@@ -1992,7 +2127,7 @@
         <translation>拼写检查词典</translation>
     </message>
     <message>
-        <location line="+11"/>
+        <location line="+12"/>
         <source>Default content layout mode for editor windows</source>
         <translation>编辑器窗口的默认内容布局模式</translation>
     </message>
@@ -2018,8 +2153,8 @@
         <translation>易读宽度</translation>
     </message>
     <message>
-        <location line="-188"/>
-        <location line="+287"/>
+        <location line="-190"/>
+        <location line="+289"/>
         <source>Editor</source>
         <translation>编辑器</translation>
     </message>
@@ -2688,7 +2823,7 @@
 <context>
     <name>vnotex::FileAssociationPage</name>
     <message>
-        <location filename="../../../widgets/dialogs/settings/fileassociationpage.cpp" line="+33"/>
+        <location filename="../../../widgets/dialogs/settings/fileassociationpage.cpp" line="+49"/>
         <source>Built-In File Types</source>
         <translation>内置文件类型</translation>
     </message>
@@ -2698,7 +2833,7 @@
         <translation>外部程序</translation>
     </message>
     <message>
-        <location line="+41"/>
+        <location line="+107"/>
         <source>Failed to save file type associations.</source>
         <translation>无法保存文件类型关联。</translation>
     </message>
@@ -2709,38 +2844,41 @@
     </message>
     <message>
         <location line="+30"/>
-        <location line="+84"/>
-        <location line="+42"/>
+        <location line="+87"/>
+        <location line="+15"/>
+        <location line="+25"/>
         <source>Suffixes separated by ;</source>
         <translation>由;分隔的后缀</translation>
     </message>
     <message>
-        <location line="-125"/>
+        <location line="-126"/>
         <source>List of suffixes for this file type</source>
         <translation>该文件类型的后缀列表</translation>
     </message>
     <message>
-        <location line="+41"/>
+        <location line="+42"/>
         <source>Add Program</source>
         <translation>添加程序</translation>
     </message>
     <message>
-        <location line="+27"/>
+        <location line="+29"/>
+        <location line="+26"/>
         <source>Program name</source>
         <translation>程序名</translation>
     </message>
     <message>
-        <location line="+1"/>
+        <location line="-25"/>
         <source>Display name for the external program</source>
         <translation>外部程序的显示名称</translation>
     </message>
     <message>
         <location line="+6"/>
+        <location line="+21"/>
         <source>Command (%1 = file path)</source>
         <translation>命令 (%1 = 文件路径)</translation>
     </message>
     <message>
-        <location line="+2"/>
+        <location line="-19"/>
         <source>Executable path or command. Use %1 as placeholder for the file path</source>
         <translation>可执行文件路径或命令。使用 %1 作为文件路径占位符</translation>
     </message>
@@ -2755,19 +2893,34 @@
         <translation>移除</translation>
     </message>
     <message>
-        <location line="+31"/>
+        <location line="+40"/>
         <source>System default app</source>
         <translation>系统默认应用</translation>
     </message>
     <message>
-        <location line="+1"/>
-        <source>Built-in program that opens files with the OS default application</source>
-        <translation>使用操作系统默认程序打开文件的内置程序</translation>
+        <location line="+3"/>
+        <source>Operating system will choose the application to open the given file</source>
+        <translation>操作系统将选择用于打开指定文件的应用程序</translation>
     </message>
     <message>
-        <location line="+5"/>
+        <location line="-8"/>
         <source>File suffixes to open with the system default application</source>
         <translation>使用系统默认程序打开的文件后缀</translation>
+    </message>
+    <message>
+        <location line="-321"/>
+        <source>System Context Menu</source>
+        <translation>系统右键菜单</translation>
+    </message>
+    <message>
+        <location line="+10"/>
+        <source>Add to Context Menu</source>
+        <translation>添加到右键菜单</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>Remove from Context Menu</source>
+        <translation>从右键菜单移除</translation>
     </message>
 </context>
 <context>
@@ -2935,6 +3088,14 @@
         <location line="+1"/>
         <source>file_pattern</source>
         <translation>文件模式</translation>
+    </message>
+</context>
+<context>
+    <name>vnotex::FirstRunController</name>
+    <message>
+        <location filename="../../../controllers/firstruncontroller.cpp" line="+150"/>
+        <source>Notebook was created, but its trust setting could not be saved</source>
+        <translation>笔记本已创建，但无法保存其信任设置</translation>
     </message>
 </context>
 <context>
@@ -3663,6 +3824,228 @@
     </message>
 </context>
 <context>
+    <name>vnotex::HttpApiConfig</name>
+    <message>
+        <location filename="../../../core/httpapiconfig.cpp" line="+65"/>
+        <source>HTTP API settings contain missing fields or invalid value types.</source>
+        <translation>HTTP API 设置缺少字段或包含无效的值类型。</translation>
+    </message>
+    <message>
+        <location line="+5"/>
+        <source>The HTTP API port must be an integer from 1 to 65535.</source>
+        <translation>HTTP API 端口必须是 1 至 65535 的整数。</translation>
+    </message>
+    <message>
+        <location line="+5"/>
+        <source>The HTTP API address must be a literal loopback address, such as 127.0.0.1 or ::1.</source>
+        <translation>HTTP API 地址必须是回环 IP 地址，例如 127.0.0.1 或 ::1。</translation>
+    </message>
+</context>
+<context>
+    <name>vnotex::HttpApiController</name>
+    <message>
+        <location filename="../../../integrations/httpapi/httpapicontroller.cpp" line="+264"/>
+        <source>Token revocation failed</source>
+        <translation>令牌撤销失败</translation>
+    </message>
+    <message>
+        <location line="-240"/>
+        <location line="+103"/>
+        <source>Service disabled</source>
+        <translation>服务已停用</translation>
+    </message>
+    <message>
+        <location line="-84"/>
+        <location line="+9"/>
+        <location line="+66"/>
+        <source>HTTP API configuration is unavailable</source>
+        <translation>HTTP API 配置不可用</translation>
+    </message>
+    <message>
+        <location line="-50"/>
+        <source>Could not load HTTP API credentials (%1)</source>
+        <translation>无法加载 HTTP API 凭据（%1）</translation>
+    </message>
+    <message>
+        <location line="+46"/>
+        <location line="+103"/>
+        <location line="+58"/>
+        <source>HTTP API is shutting down</source>
+        <translation>HTTP API 正在关闭</translation>
+    </message>
+    <message>
+        <location line="-152"/>
+        <source>Invalid HTTP API settings: %1</source>
+        <translation>HTTP API 设置无效：%1</translation>
+    </message>
+    <message>
+        <location line="+9"/>
+        <source>Waiting for application startup</source>
+        <translation>正在等待应用启动完成</translation>
+    </message>
+    <message>
+        <location line="+14"/>
+        <source>Could not start HTTP API (%1)</source>
+        <translation>无法启动 HTTP API（%1）</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>Listening on %1</source>
+        <translation>正在监听 %1</translation>
+    </message>
+    <message>
+        <location line="+12"/>
+        <source>Stopped</source>
+        <translation>已停止</translation>
+    </message>
+    <message>
+        <location line="+71"/>
+        <source>Select at least one available notebook</source>
+        <translation>请选择至少一个可用的笔记本</translation>
+    </message>
+    <message>
+        <location line="+12"/>
+        <source>Could not issue an HTTP API token (%1)</source>
+        <translation>无法签发 HTTP API 令牌（%1）</translation>
+    </message>
+    <message>
+        <location line="+38"/>
+        <source>Token access is blocked for this session, but revocation could not be saved (%1). The HTTP API has been stopped.</source>
+        <translation>本次会话中已阻止令牌访问，但无法保存撤销记录（%1）。HTTP API 已停止。</translation>
+    </message>
+</context>
+<context>
+    <name>vnotex::HttpApiPage</name>
+    <message>
+        <location filename="../../../widgets/dialogs/settings/httpapipage.cpp" line="+225"/>
+        <source>Never</source>
+        <translation>永不过期</translation>
+    </message>
+    <message>
+        <location line="-110"/>
+        <source>New</source>
+        <translation>新建</translation>
+    </message>
+    <message>
+        <location line="-71"/>
+        <location line="+218"/>
+        <source>HTTP API</source>
+        <translation>HTTP API</translation>
+    </message>
+    <message>
+        <location line="-217"/>
+        <source>For remote access, configure an HTTPS reverse proxy on this computer. VNote listens only on loopback and does not install a proxy or open firewall ports.</source>
+        <translation>如需远程访问，请在此计算机上配置 HTTPS 反向代理。VNote 仅监听回环地址，不会安装代理或开放防火墙端口。</translation>
+    </message>
+    <message>
+        <location line="+4"/>
+        <source>Enable HTTP API</source>
+        <translation>启用 HTTP API</translation>
+    </message>
+    <message>
+        <location line="+30"/>
+        <source>Loopback address</source>
+        <translation>回环地址</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Use a literal loopback address, such as 127.0.0.1 or ::1</source>
+        <translation>使用回环 IP 地址，例如 127.0.0.1 或 ::1</translation>
+    </message>
+    <message>
+        <location line="+4"/>
+        <source>Port</source>
+        <translation>端口</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Use a port from 1 to 65535; an occupied port is not replaced automatically</source>
+        <translation>使用 1 至 65535 的端口；端口被占用时不会自动更换</translation>
+    </message>
+    <message>
+        <location line="+9"/>
+        <location line="+15"/>
+        <source>Client Tokens</source>
+        <translation>客户端令牌</translation>
+    </message>
+    <message>
+        <location line="-14"/>
+        <source>Tokens can be managed while the listener is disabled. Issuing and revoking take effect immediately and are not undone by Reset. To change permissions, revoke the token and issue a new one. Future notebooks are never granted automatically.</source>
+        <translation>监听器停用时仍可管理令牌。签发和撤销会立即生效，且无法通过重置撤销。要更改权限，请撤销令牌并签发新令牌。今后添加的笔记本不会自动获得授权。</translation>
+    </message>
+    <message>
+        <location line="+7"/>
+        <source>Client</source>
+        <translation>客户端</translation>
+    </message>
+    <message>
+        <location line="+0"/>
+        <source>Token ID</source>
+        <translation>令牌 ID</translation>
+    </message>
+    <message>
+        <location line="+0"/>
+        <source>Permissions</source>
+        <translation>权限</translation>
+    </message>
+    <message>
+        <location line="+0"/>
+        <source>Notebooks</source>
+        <translation>笔记本</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Expires</source>
+        <translation>到期时间</translation>
+    </message>
+    <message>
+        <location line="+0"/>
+        <source>Status</source>
+        <translation>状态</translation>
+    </message>
+    <message>
+        <location line="+19"/>
+        <source>Revoke</source>
+        <translation>撤销</translation>
+    </message>
+    <message>
+        <location line="+7"/>
+        <source>Refresh</source>
+        <translation>刷新</translation>
+    </message>
+    <message>
+        <location line="+35"/>
+        <location line="+22"/>
+        <source>HTTP API controller is unavailable.</source>
+        <translation>HTTP API 控制器不可用。</translation>
+    </message>
+    <message>
+        <location line="+35"/>
+        <source>Expired</source>
+        <translation>已过期</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Active</source>
+        <translation>有效</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Disabled</source>
+        <translation>已停用</translation>
+    </message>
+    <message>
+        <location line="+27"/>
+        <source>Revoke Token</source>
+        <translation>撤销令牌</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Revoke this token? Queued requests lose access immediately; already committed changes cannot be undone.</source>
+        <translation>是否撤销此令牌？排队中的请求会立即失去访问权限；已提交的更改无法撤销。</translation>
+    </message>
+</context>
+<context>
     <name>vnotex::ImageHostController</name>
     <message>
         <location filename="../../../controllers/imagehostcontroller.cpp" line="+28"/>
@@ -3678,12 +4061,12 @@
 <context>
     <name>vnotex::ImageHostPage</name>
     <message>
-        <location filename="../../../widgets/dialogs/settings/imagehostpage.cpp" line="+69"/>
+        <location filename="../../../widgets/dialogs/settings/imagehostpage.cpp" line="+72"/>
         <source>New Image Host</source>
         <translation>新建图床</translation>
     </message>
     <message>
-        <location line="-28"/>
+        <location line="-31"/>
         <source>General</source>
         <translation>通用</translation>
     </message>
@@ -3703,12 +4086,12 @@
         <translation>清空图床中无用的图片（仅基于当前文件）</translation>
     </message>
     <message>
-        <location line="+44"/>
+        <location line="+49"/>
         <source>Local</source>
         <translation>本地</translation>
     </message>
     <message>
-        <location line="+87"/>
+        <location line="+89"/>
         <source>Remove</source>
         <translation>移除</translation>
     </message>
@@ -4233,7 +4616,7 @@
 <context>
     <name>vnotex::LinkPreviewOverlay</name>
     <message>
-        <location filename="../../../widgets/linkpreviewoverlay.cpp" line="+133"/>
+        <location filename="../../../widgets/linkpreviewoverlay.cpp" line="+135"/>
         <source>Preview</source>
         <translation>预览</translation>
     </message>
@@ -4295,13 +4678,13 @@
     </message>
     <message>
         <location line="+15"/>
-        <location line="+667"/>
-        <location filename="../../../widgets/toolbarhelper2.cpp" line="+479"/>
+        <location line="+669"/>
+        <location filename="../../../widgets/toolbarhelper2.cpp" line="+480"/>
         <source>Lock All</source>
         <translation>全部锁定</translation>
     </message>
     <message>
-        <location line="-562"/>
+        <location line="-564"/>
         <source>Loading theme...</source>
         <translation>正在加载主题...</translation>
     </message>
@@ -4316,7 +4699,7 @@
         <translation>经 3 次尝试后仍无法解决同步冲突。请手动解决或联系支持。</translation>
     </message>
     <message>
-        <location line="+321"/>
+        <location line="+323"/>
         <source>Do you want to minimize %1 to system tray instead of quitting when closed?</source>
         <translation>关闭时，是否将%1最小化到系统托盘而非退出？</translation>
     </message>
@@ -4336,7 +4719,7 @@
         <translation>不支持导出加密笔记。</translation>
     </message>
     <message>
-        <location line="+210"/>
+        <location line="+214"/>
         <location line="+14"/>
         <source>Tools</source>
         <translation>工具</translation>
@@ -4369,7 +4752,7 @@
         <translation>退出</translation>
     </message>
     <message>
-        <location filename="../../../widgets/toolbarhelper2.cpp" line="-530"/>
+        <location filename="../../../widgets/toolbarhelper2.cpp" line="-531"/>
         <source>File</source>
         <translation>文件</translation>
     </message>
@@ -4400,9 +4783,9 @@
         <translation>导入文件夹</translation>
     </message>
     <message>
-        <location filename="../../../widgets/mainwindow2.cpp" line="-984"/>
+        <location filename="../../../widgets/mainwindow2.cpp" line="-988"/>
         <location line="+22"/>
-        <location line="+326"/>
+        <location line="+330"/>
         <location filename="../../../widgets/toolbarhelper2.cpp" line="+91"/>
         <source>Export</source>
         <translation>导出</translation>
@@ -4419,7 +4802,7 @@
         <translation>快速访问</translation>
     </message>
     <message>
-        <location line="+71"/>
+        <location line="+72"/>
         <source>Home</source>
         <translation>主页</translation>
     </message>
@@ -4830,7 +5213,7 @@
         <location line="-15"/>
         <location line="+65"/>
         <location line="+87"/>
-        <location filename="../../../widgets/editors/mindmapeditor.cpp" line="+367"/>
+        <location filename="../../../widgets/editors/mindmapeditor.cpp" line="+369"/>
         <source>Resize Image</source>
         <translation>调整图片大小</translation>
     </message>
@@ -4894,7 +5277,7 @@
 <context>
     <name>vnotex::MarkdownEditorPage</name>
     <message>
-        <location filename="../../../widgets/dialogs/settings/markdowneditorpage.cpp" line="+288"/>
+        <location filename="../../../widgets/dialogs/settings/markdowneditorpage.cpp" line="+249"/>
         <source>Protect Markdown from XSS</source>
         <translation>防止 Markdown 中的 XSS 攻击</translation>
     </message>
@@ -4924,7 +5307,32 @@
         <translation>标签页隐藏指定分钟数后释放网页视图内存；返回时重新加载当前 Markdown，不会丢失未保存的文本或撤销历史</translation>
     </message>
     <message>
-        <location line="-147"/>
+        <location line="-349"/>
+        <source>Editor Toolbar Options</source>
+        <translation>编辑器工具栏选项</translation>
+    </message>
+    <message>
+        <location line="+0"/>
+        <source>Options in the toolbar of the editor</source>
+        <translation>编辑器工具栏中的选项</translation>
+    </message>
+    <message>
+        <location line="+9"/>
+        <source>Show a rendered preview beside the Markdown source while editing</source>
+        <translation>编辑时在 Markdown 源码旁显示渲染后的预览</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>Show previews of images, code blocks, math and tables inside the source editor (choose which sources to preview in the Edit section below)</source>
+        <translation>在源码编辑器内显示图片、代码块、数学公式和表格的预览（在下方的编辑部分选择要预览的内容类型）</translation>
+    </message>
+    <message>
+        <location line="+5"/>
+        <source>None: show all Markdown source. Passive: show syntax and shorten long link, image and reference URLs. Moderate: hide supported Markdown markers and link syntax, reveal them on cursor entry, and shorten long image and reference URLs. Aggressive: hide supported Markdown markers and link syntax, and shorten long image and reference URLs; link syntax reappears when the cursor enters it</source>
+        <translation>无：显示全部 Markdown 源码。温和：显示语法，并缩短较长的链接、图片和引用网址。适中：隐藏支持的 Markdown 标记和链接语法，光标移入时显示，并缩短较长的图片和引用网址。强烈：隐藏支持的 Markdown 标记和链接语法，并缩短较长的图片和引用网址；光标移入链接时重新显示其语法</translation>
+    </message>
+    <message>
+        <location line="+185"/>
         <source>Read</source>
         <translation>阅读</translation>
     </message>
@@ -5065,7 +5473,7 @@
         <translation>原地预览源</translation>
     </message>
     <message>
-        <location line="+4"/>
+        <location line="+5"/>
         <source>Image link</source>
         <translation>图片链接</translation>
     </message>
@@ -5167,12 +5575,12 @@
     </message>
     <message>
         <location line="+2"/>
-        <location line="+85"/>
+        <location line="+90"/>
         <source>Web service</source>
         <translation>网络服务</translation>
     </message>
     <message>
-        <location line="-72"/>
+        <location line="-77"/>
         <source>Image format for PlantUml graphs in read mode and exports; editor previews always use PNG</source>
         <translation>阅读模式和导出时 PlantUml 图表使用的图片格式；编辑器预览始终使用 PNG</translation>
     </message>
@@ -5192,7 +5600,7 @@
         <translation>PlantUml 格式</translation>
     </message>
     <message>
-        <location line="+50"/>
+        <location line="+54"/>
         <source>Override the web service used to render PlantUml graphs</source>
         <translation>覆盖用于渲染 PlantUml 图的网络服务</translation>
     </message>
@@ -5202,7 +5610,7 @@
         <translation>覆盖 PlantUml 网络服务</translation>
     </message>
     <message>
-        <location line="+12"/>
+        <location line="+13"/>
         <source>Use web service or local executable file to render Graphviz graphs</source>
         <translation>使用网络服务或本地可执行文件渲染 Graphviz 图</translation>
     </message>
@@ -5212,8 +5620,8 @@
         <translation>本地可执行文件</translation>
     </message>
     <message>
-        <location line="-17"/>
-        <location line="+93"/>
+        <location line="-18"/>
+        <location line="+98"/>
         <source>Empty to use default one</source>
         <translation>留空则使用默认值</translation>
     </message>
@@ -5228,7 +5636,7 @@
         <translation>覆盖 MathJax 脚本</translation>
     </message>
     <message>
-        <location line="-163"/>
+        <location line="-172"/>
         <source>Local JAR</source>
         <translation>本地JAR</translation>
     </message>
@@ -5238,7 +5646,7 @@
         <translation>PlantUml</translation>
     </message>
     <message>
-        <location line="+30"/>
+        <location line="+32"/>
         <source>Local JAR file to render PlantUml graphs</source>
         <translation>用于渲染PlantUml图表的本地JAR文件</translation>
     </message>
@@ -5249,12 +5657,12 @@
     </message>
     <message>
         <location line="+4"/>
-        <location line="+69"/>
+        <location line="+74"/>
         <source>Test</source>
         <translation>测试</translation>
     </message>
     <message>
-        <location line="-68"/>
+        <location line="-73"/>
         <source>Test PlantUml JAR and Java Runtime Environment</source>
         <translation>测试PlantUml JAR以及Java运行时环境</translation>
     </message>
@@ -5265,34 +5673,34 @@
     </message>
     <message>
         <location line="+6"/>
-        <location line="+70"/>
+        <location line="+75"/>
         <source>Test %1.</source>
         <translation>测试%1。</translation>
     </message>
     <message>
-        <location line="-70"/>
-        <location line="+70"/>
+        <location line="-75"/>
+        <location line="+75"/>
         <source>succeeded</source>
         <translation>成功</translation>
     </message>
     <message>
-        <location line="-70"/>
-        <location line="+70"/>
+        <location line="-75"/>
+        <location line="+75"/>
         <source>failed</source>
         <translation>失败</translation>
     </message>
     <message>
-        <location line="-65"/>
+        <location line="-70"/>
         <source>PlantUml JAR file</source>
         <translation>PlantUml JAR文件</translation>
     </message>
     <message>
-        <location line="+32"/>
+        <location line="+35"/>
         <source>Graphviz</source>
         <translation>Graphviz</translation>
     </message>
     <message>
-        <location line="+15"/>
+        <location line="+17"/>
         <source>Local executable file to render Graphviz graphs</source>
         <translation>用于渲染Graphviz图表的本地可执行文件</translation>
     </message>
@@ -5317,7 +5725,7 @@
         <translation>Graphviz可执行文件</translation>
     </message>
     <message>
-        <location line="+15"/>
+        <location line="+17"/>
         <source>KaTeX</source>
         <translation>KaTeX</translation>
     </message>
@@ -5342,7 +5750,7 @@
         <translation>覆盖用于渲染数学公式的MathJax脚本</translation>
     </message>
     <message>
-        <location line="-557"/>
+        <location line="-567"/>
         <source>Markdown Editor</source>
         <translation>Markdown编辑器</translation>
     </message>
@@ -5350,29 +5758,109 @@
 <context>
     <name>vnotex::MarkdownViewWindow2</name>
     <message>
-        <location filename="../../../widgets/markdownviewwindow2.cpp" line="+169"/>
+        <location filename="../../../widgets/markdownviewwindow2.cpp" line="+928"/>
+        <source>None</source>
+        <translation>无</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>Passive</source>
+        <translation>温和</translation>
+    </message>
+    <message>
+        <location line="+4"/>
+        <source>Moderate</source>
+        <translation>适中</translation>
+    </message>
+    <message>
+        <location line="+4"/>
+        <source>Aggressive</source>
+        <translation>强烈</translation>
+    </message>
+    <message>
+        <location line="-10"/>
+        <source>Show all Markdown source</source>
+        <translation>显示全部 Markdown 源码</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>Shorten long link, image and reference URLs while showing Markdown syntax</source>
+        <translation>缩短较长的链接、图片和引用网址，同时显示 Markdown 语法</translation>
+    </message>
+    <message>
+        <location line="+4"/>
+        <source>Hide supported Markdown markers and link syntax, reveal them on cursor entry, and shorten long image and reference URLs</source>
+        <translation>隐藏支持的 Markdown 标记和链接语法，光标移入时显示，并缩短较长的图片和引用网址</translation>
+    </message>
+    <message>
+        <location line="+4"/>
+        <source>Hide supported Markdown markers and link syntax, and shorten long image and reference URLs; link syntax reveals on entry</source>
+        <translation>隐藏支持的 Markdown 标记和链接语法，并缩短较长的图片和引用网址；光标移入时显示链接语法</translation>
+    </message>
+    <message>
+        <location line="-716"/>
+        <source>Choose Markdown Editing Experience</source>
+        <translation>选择 Markdown 编辑体验</translation>
+    </message>
+    <message>
+        <location line="+24"/>
+        <source>Conceal Markdown markers</source>
+        <translation>隐藏 Markdown 标记</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>I prefer a beautiful look closer to what it is rendered</source>
+        <translation>我更喜欢接近渲染效果的美观外观</translation>
+    </message>
+    <message>
+        <location line="+7"/>
+        <source>Both the left and the right look correct</source>
+        <translation>左右两种方式看起来都不错</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Conceal markers to make me attentive and reveal current ones to help me write</source>
+        <translation>隐藏标记让我专注，显示当前标记以帮助我写作</translation>
+    </message>
+    <message>
+        <location line="+7"/>
+        <source>Show Markdown markers</source>
+        <translation>显示 Markdown 标记</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>I prefer a strong control of what I have written and enjoy the muscles of Markdown</source>
+        <translation>我更喜欢完全掌控自己写下的内容，享受 Markdown 的力量</translation>
+    </message>
+    <message>
+        <location line="+13"/>
+        <source>You could always change Markdown editing experience using the toolbar menu at the top right corner.</source>
+        <translation>您随时都可以使用右上角的工具栏菜单更改 Markdown 编辑体验。</translation>
+    </message>
+    <message>
+        <location line="-100"/>
         <source>Unable to convert HTML to Markdown</source>
         <translation>无法将 HTML 转换为 Markdown</translation>
     </message>
     <message>
-        <location line="+372"/>
+        <location line="+500"/>
         <source>Presentation Mode</source>
         <translation>演示模式</translation>
     </message>
     <message>
         <location line="+98"/>
         <location line="+37"/>
-        <location line="+636"/>
+        <location line="+668"/>
         <source>Unable to start presentation</source>
         <translation>无法启动演示</translation>
     </message>
     <message>
-        <location line="-490"/>
+        <location line="-495"/>
         <source>Printing encrypted notes is not supported</source>
         <translation>不支持打印加密笔记</translation>
     </message>
     <message>
-        <location line="+193"/>
+        <location line="+198"/>
         <source>Unable to parse Markdown</source>
         <translation>无法解析 Markdown</translation>
     </message>
@@ -5399,7 +5887,7 @@
     </message>
     <message>
         <location line="-4"/>
-        <location line="+2051"/>
+        <location line="+2493"/>
         <location line="+16"/>
         <location line="+84"/>
         <location line="+14"/>
@@ -5407,25 +5895,25 @@
         <translation>无法加载预览</translation>
     </message>
     <message>
-        <location line="-1474"/>
+        <location line="-1470"/>
         <location line="+15"/>
         <source>Protected note links can open only indexed notebook notes</source>
         <translation>受保护笔记中的链接只能打开笔记本内已索引的笔记</translation>
     </message>
     <message>
         <location line="+64"/>
-        <location line="+601"/>
+        <location line="+597"/>
         <location line="+764"/>
         <source>Unable to load note content</source>
         <translation>无法加载笔记内容</translation>
     </message>
     <message>
-        <location line="-1231"/>
+        <location line="-1225"/>
         <source>Unable to read the editor content</source>
         <translation>无法读取编辑器内容</translation>
     </message>
     <message>
-        <location line="+162"/>
+        <location line="+163"/>
         <source>Unable to open preview</source>
         <translation>无法打开预览</translation>
     </message>
@@ -5435,7 +5923,7 @@
         <translation>无法打开预览；仍可使用编辑器</translation>
     </message>
     <message>
-        <location line="+1465"/>
+        <location line="+1458"/>
         <source>Printing completed</source>
         <translation>打印完成</translation>
     </message>
@@ -5450,12 +5938,12 @@
         <translation>当前无法恢复章节编号。自动章节编号仍处于关闭状态。请将此笔记设为当前笔记并使其可编辑，然后开启再关闭“允许自动章节编号”以重试。</translation>
     </message>
     <message>
-        <location line="-2786"/>
+        <location line="-3388"/>
         <source>Unable to render Markdown</source>
         <translation>无法渲染 Markdown</translation>
     </message>
     <message>
-        <location line="+3243"/>
+        <location line="+3845"/>
         <location line="+9"/>
         <source>Replace is not supported in read mode</source>
         <translation>阅读模式不支持替换</translation>
@@ -5517,7 +6005,17 @@
         <translation>复制图片(&amp;G)</translation>
     </message>
     <message>
-        <location line="+20"/>
+        <location line="+51"/>
+        <source>Expand</source>
+        <translation>展开</translation>
+    </message>
+    <message>
+        <location line="+0"/>
+        <source>Collapse</source>
+        <translation>折叠</translation>
+    </message>
+    <message>
+        <location line="+22"/>
         <source>Copy Image Address</source>
         <translation>复制图片地址</translation>
     </message>
@@ -5613,7 +6111,7 @@
     <message>
         <location filename="../../../widgets/editors/mindmapeditor.cpp" line="-130"/>
         <location line="+6"/>
-        <location line="+330"/>
+        <location line="+331"/>
         <source>The mind map buffer is unavailable.</source>
         <translation>思维导图缓冲区不可用。</translation>
     </message>
@@ -5653,7 +6151,7 @@
         <translation>无法序列化思维导图。</translation>
     </message>
     <message>
-        <location line="+303"/>
+        <location line="+310"/>
         <source>Insert Link</source>
         <translation>插入链接</translation>
     </message>
@@ -5751,17 +6249,37 @@
 <context>
     <name>vnotex::MindMapEditorPage</name>
     <message>
-        <location filename="../../../widgets/dialogs/settings/mindmapeditorpage.cpp" line="+161"/>
+        <location filename="../../../widgets/dialogs/settings/mindmapeditorpage.cpp" line="+175"/>
         <source>Mind Map Editor</source>
         <translation>思维导图编辑器</translation>
     </message>
     <message>
-        <location line="-131"/>
+        <location line="-132"/>
         <source>Style</source>
         <translation>样式</translation>
     </message>
     <message>
-        <location line="+4"/>
+        <location line="-11"/>
+        <source>Editor Toolbar Options</source>
+        <translation>编辑器工具栏选项</translation>
+    </message>
+    <message>
+        <location line="+0"/>
+        <source>Options in the toolbar of the editor</source>
+        <translation>编辑器工具栏中的选项</translation>
+    </message>
+    <message>
+        <location line="+8"/>
+        <source>Layout</source>
+        <translation>布局</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Choose a Balanced, Right, Left or Outline layout for the mind map</source>
+        <translation>为思维导图选择均衡、向右、向左或大纲布局</translation>
+    </message>
+    <message>
+        <location line="+6"/>
         <source>Default (interface font)</source>
         <translation>默认（界面字体）</translation>
     </message>
@@ -5960,14 +6478,24 @@
 <context>
     <name>vnotex::MindMapViewWindow2</name>
     <message>
-        <location filename="../../../widgets/mindmapviewwindow2.cpp" line="+187"/>
-        <location line="+31"/>
+        <location filename="../../../widgets/mindmapviewwindow2.cpp" line="+63"/>
+        <source>Close mind map (%1) with an unapplied topic edit?</source>
+        <translation>思维导图（%1）中有尚未应用的主题编辑，仍要关闭吗？</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>The topic edit could not be applied to the source. Discard only this draft? Changes already applied to the source will be kept.</source>
+        <translation>无法将主题编辑应用到源文档。是否仅丢弃此草稿？已应用到源文档的更改将被保留。</translation>
+    </message>
+    <message>
+        <location line="+232"/>
+        <location line="+32"/>
         <source>Insert Link</source>
         <translation>插入链接</translation>
     </message>
     <message>
-        <location line="-29"/>
-        <location line="+30"/>
+        <location line="-30"/>
+        <location line="+31"/>
         <source>Insert Image</source>
         <translation>插入图片</translation>
     </message>
@@ -6002,7 +6530,7 @@
         <translation>演示模式</translation>
     </message>
     <message>
-        <location line="+144"/>
+        <location line="+156"/>
         <source>Unable to read the mind map: %1</source>
         <translation>无法读取思维导图：%1</translation>
     </message>
@@ -6029,12 +6557,12 @@
         <translation>打印完成</translation>
     </message>
     <message>
-        <location line="+152"/>
+        <location line="+259"/>
         <source>Unable to read the mind map outline.</source>
         <translation>无法读取思维导图大纲。</translation>
     </message>
     <message>
-        <location line="+59"/>
+        <location line="+65"/>
         <source>Replacement is not supported for mind maps.</source>
         <translation>思维导图不支持替换。</translation>
     </message>
@@ -6194,6 +6722,129 @@
         <location line="+6"/>
         <source>New Folder</source>
         <translation>新建文件夹</translation>
+    </message>
+</context>
+<context>
+    <name>vnotex::NewHttpApiTokenDialog</name>
+    <message>
+        <location filename="../../../widgets/dialogs/settings/newhttpapitokendialog.cpp" line="+177"/>
+        <source>Copy</source>
+        <translation>复制</translation>
+    </message>
+    <message>
+        <location line="-81"/>
+        <source>Expiry</source>
+        <translation>有效期</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>1 day</source>
+        <translation>1 天</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>7 days</source>
+        <translation>7 天</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>30 days</source>
+        <translation>30 天</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>60 days</source>
+        <translation>60 天</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>90 days</source>
+        <translation>90 天</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>180 days</source>
+        <translation>180 天</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Never</source>
+        <translation>永不过期</translation>
+    </message>
+    <message>
+        <location line="-73"/>
+        <source>Issue Client Token</source>
+        <translation>签发客户端令牌</translation>
+    </message>
+    <message>
+        <location line="+7"/>
+        <source>Choose explicit notebook grants and permissions. Live reads may expose unsaved editor text. Write changes notes; trash moves notes to the recycle bin.</source>
+        <translation>请选择明确的笔记本授权和权限。实时读取可能会暴露编辑器中尚未保存的文本。写入会更改笔记；移至回收站会将笔记放入回收站。</translation>
+    </message>
+    <message>
+        <location line="+10"/>
+        <source>Client label</source>
+        <translation>客户端标签</translation>
+    </message>
+    <message>
+        <location line="+12"/>
+        <source>Allowed notebooks</source>
+        <translation>允许访问的笔记本</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>Select one or more notebooks for access</source>
+        <translation>选择一个或多个允许访问的笔记本</translation>
+    </message>
+    <message>
+        <location line="+19"/>
+        <source>Read saved notes and search (notes:read)</source>
+        <translation>读取已保存的笔记和搜索 (notes:read)</translation>
+    </message>
+    <message>
+        <location line="+4"/>
+        <source>Read live editor text (notes:read-live)</source>
+        <translation>读取编辑器实时文本 (notes:read-live)</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>Create and edit notes (notes:write)</source>
+        <translation>创建和编辑笔记 (notes:write)</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>Trash notes (notes:trash)</source>
+        <translation>将笔记移至回收站 (notes:trash)</translation>
+    </message>
+    <message>
+        <location line="+22"/>
+        <source>Issue Token</source>
+        <translation>签发令牌</translation>
+    </message>
+    <message>
+        <location line="+32"/>
+        <source>Enter a client label, select at least one notebook and permission, and choose a valid expiry option.</source>
+        <translation>请输入客户端标签，选择至少一个笔记本和一项权限，并选择有效的有效期选项。</translation>
+    </message>
+    <message>
+        <location line="+20"/>
+        <source>Token Issued</source>
+        <translation>令牌已签发</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>Copy this bearer token now and keep it private. It will not be shown again.</source>
+        <translation>请立即复制此持有者令牌并妥善保密。之后将无法再次查看。</translation>
+    </message>
+    <message>
+        <location line="-86"/>
+        <source>Permissions</source>
+        <translation>权限</translation>
+    </message>
+    <message>
+        <location line="+34"/>
+        <source>HTTP API controller is unavailable.</source>
+        <translation>HTTP API 控制器不可用。</translation>
     </message>
 </context>
 <context>
@@ -6388,7 +7039,12 @@
 <context>
     <name>vnotex::NewNotebookController</name>
     <message>
-        <location filename="../../../controllers/newnotebookcontroller.cpp" line="-168"/>
+        <location filename="../../../controllers/newnotebookcontroller.cpp" line="-41"/>
+        <source>Notebook was created, but its trust setting could not be saved</source>
+        <translation>笔记本已创建，但无法保存其信任设置</translation>
+    </message>
+    <message>
+        <location line="-131"/>
         <source>Please specify a name for the notebook.</source>
         <translation>请为笔记本指定名称。</translation>
     </message>
@@ -6438,7 +7094,7 @@
         <translation>无法在 (%1) 中创建笔记本。</translation>
     </message>
     <message>
-        <location line="+61"/>
+        <location line="+65"/>
         <source>Sync services not available; cannot bootstrap notebook.</source>
         <translation>同步服务不可用；无法初始化笔记本同步。</translation>
     </message>
@@ -6835,6 +7491,14 @@
     </message>
 </context>
 <context>
+    <name>vnotex::NoteOperationService</name>
+    <message>
+        <location filename="../../../core/services/noteoperationservice.cpp" line="+35"/>
+        <source>The note operation could not complete. Check its error code and saved status.</source>
+        <translation>笔记操作未能完成。请检查其错误代码和保存状态。</translation>
+    </message>
+</context>
+<context>
     <name>vnotex::NoteTemplateSelector</name>
     <message>
         <location filename="../../../widgets/dialogs/notetemplateselector.cpp" line="+33"/>
@@ -6855,7 +7519,7 @@
 <context>
     <name>vnotex::NotebookCoreService</name>
     <message>
-        <location filename="../../../core/services/notebookcoreservice.cpp" line="+728"/>
+        <location filename="../../../core/services/notebookcoreservice.cpp" line="+758"/>
         <source>Unable to unlock: incorrect password or damaged key data</source>
         <translation>无法解锁：密码错误或密钥数据损坏</translation>
     </message>
@@ -7110,24 +7774,24 @@ This will re-scan all files and rebuild the metadata cache from the filesystem.<
     <message>
         <location line="+114"/>
         <location line="+17"/>
-        <location line="+126"/>
+        <location line="+128"/>
         <location line="+16"/>
         <location line="+142"/>
         <source>Please first create a notebook to hold your data.</source>
         <translation>请先创建一个笔记本来保存数据。</translation>
     </message>
     <message>
-        <location line="-261"/>
+        <location line="-263"/>
         <source>Please set up quick note schemes in the Settings dialog first.</source>
         <translation>请先在设置对话框中设置快速笔记方案。</translation>
     </message>
     <message>
-        <location line="+8"/>
+        <location line="+9"/>
         <source>New Quick Note</source>
         <translation>新建快速笔记</translation>
     </message>
     <message>
-        <location line="+261"/>
+        <location line="+262"/>
         <source>The current notebook is read-only, so the note was not created.</source>
         <translation>当前笔记本为只读，未创建该笔记。</translation>
     </message>
@@ -7221,7 +7885,7 @@ This will re-scan all files and rebuild the metadata cache from the filesystem.<
         <translation>更新部分文件的标签失败。</translation>
     </message>
     <message>
-        <location line="+63"/>
+        <location line="+65"/>
         <source>Select Folder for the Bundle</source>
         <translation>选择打包文件夹</translation>
     </message>
@@ -7243,13 +7907,13 @@ This will re-scan all files and rebuild the metadata cache from the filesystem.<
 %4</translation>
     </message>
     <message>
-        <location line="-2243"/>
-        <location line="+2273"/>
+        <location line="-2247"/>
+        <location line="+2277"/>
         <source>%1: %2</source>
         <translation>%1：%2</translation>
     </message>
     <message>
-        <location line="-2397"/>
+        <location line="-2401"/>
         <source>Encrypt Note</source>
         <translation>加密笔记</translation>
     </message>
@@ -7425,7 +8089,7 @@ Images and attachments stored as separate files are NOT encrypted. Comments also
         <translation>只读笔记本</translation>
     </message>
     <message>
-        <location line="+1701"/>
+        <location line="+1705"/>
         <source>%1 copied, %2 moved, %3 left at the source, %4 failed.</source>
         <translation>已复制 %1 项，已移动 %2 项，留在源位置 %3 项，失败 %4 项。</translation>
     </message>
@@ -7514,7 +8178,7 @@ Last sync init failed: error code %1</source>
         <translation>正在准备…</translation>
     </message>
     <message>
-        <location line="-2115"/>
+        <location line="-2119"/>
         <source>The selected legacy note needs its original vx_notebook/encryption.vne. Restore that file from a backup. Creating a new encryption context cannot recover existing encrypted notes.</source>
         <translation>所选旧版笔记需要其原始 vx_notebook/encryption.vne 文件。请从备份中恢复该文件。创建新的加密上下文无法恢复已有的加密笔记。</translation>
     </message>
@@ -7593,7 +8257,7 @@ Notebook: %1
         <translation>确认密码</translation>
     </message>
     <message>
-        <location line="+1950"/>
+        <location line="+1954"/>
         <location line="+72"/>
         <source>Cancel</source>
         <translation>取消</translation>
@@ -7623,12 +8287,12 @@ Open the bundle location?</source>
         <translation>分享文件夹失败。</translation>
     </message>
     <message>
-        <location filename="../../../widgets/notebookexplorer2_sortseam.cpp" line="+89"/>
+        <location filename="../../../widgets/notebookexplorer2_sortseam.cpp" line="+97"/>
         <source>(notebook root)</source>
         <translation>（笔记本根目录）</translation>
     </message>
     <message>
-        <location line="+3"/>
+        <location line="+2"/>
         <source>Reorder children of %1. Order is saved to the configuration file.</source>
         <translation>调整 %1 的子项顺序。顺序将保存到配置文件。</translation>
     </message>
@@ -8011,7 +8675,7 @@ The folder&apos;s contents will be indexed as notebook nodes</source>
         <translation>标记(&amp;M)</translation>
     </message>
     <message>
-        <location line="+114"/>
+        <location line="+115"/>
         <location line="+1179"/>
         <source>Protected Note</source>
         <translation>受保护笔记</translation>
@@ -8171,7 +8835,7 @@ The folder&apos;s contents will be indexed as notebook nodes</source>
         <translation>已固定 %1 项；%2 项已存在。</translation>
     </message>
     <message>
-        <location filename="../../../controllers/notebooknodecontroller_reorder.cpp" line="+117"/>
+        <location filename="../../../controllers/notebooknodecontroller_reorder.cpp" line="+118"/>
         <location line="+6"/>
         <location line="+27"/>
         <source>Reorder</source>
@@ -8724,7 +9388,7 @@ Continue?</source>
         <translation>详情</translation>
     </message>
     <message>
-        <location line="+99"/>
+        <location line="+98"/>
         <source>Dismiss</source>
         <translation>忽略</translation>
     </message>
@@ -9368,7 +10032,7 @@ The legacy notebook would be kept for data backup.</source>
 <context>
     <name>vnotex::OutlineProvider</name>
     <message>
-        <location filename="../../../widgets/outlineprovider.h" line="+119"/>
+        <location filename="../../../widgets/outlineprovider.h" line="+193"/>
         <source>[EMPTY]</source>
         <translation>[空]</translation>
     </message>
@@ -9377,16 +10041,19 @@ The legacy notebook would be kept for data backup.</source>
     <name>vnotex::OutlineViewer</name>
     <message>
         <location filename="../../../widgets/outlineviewer.cpp" line="+45"/>
+        <location filename="../../../widgets/viewarea2.cpp" line="+980"/>
         <source>Reorder Outline</source>
         <translation>调整大纲顺序</translation>
     </message>
     <message>
         <location line="+1"/>
+        <location filename="../../../widgets/viewarea2.cpp" line="+1"/>
         <source>Move heading &quot;%1&quot; and its content block to the selected outline position?</source>
         <translation>将标题 &quot;%1&quot; 及其内容块移动到选定的大纲位置？</translation>
     </message>
     <message>
         <location line="+5"/>
+        <location filename="../../../widgets/viewarea2.cpp" line="+6"/>
         <source>Heading levels in the moved block will be adjusted to preserve the outline hierarchy.</source>
         <translation>将调整所移动内容块中的标题级别，以保持大纲层级结构。</translation>
     </message>
@@ -9452,7 +10119,7 @@ The legacy notebook would be kept for data backup.</source>
 <context>
     <name>vnotex::PdfViewWindow2</name>
     <message>
-        <location filename="../../../widgets/pdfviewwindow2.cpp" line="+907"/>
+        <location filename="../../../widgets/pdfviewwindow2.cpp" line="+917"/>
         <source>Unable to load PDF document</source>
         <translation>无法加载 PDF 文档</translation>
     </message>
@@ -9613,48 +10280,49 @@ The legacy notebook would be kept for data backup.</source>
     <name>vnotex::QuickAccessPage</name>
     <message>
         <location filename="../../../widgets/dialogs/settings/quickaccesspage.cpp" line="+43"/>
-        <location line="+208"/>
+        <location line="+23"/>
+        <location line="+205"/>
         <source>Quick Access</source>
         <translation>快速访问</translation>
     </message>
     <message>
-        <location line="-170"/>
+        <location line="-192"/>
         <source>Quick Note</source>
         <translation>快速笔记</translation>
     </message>
     <message>
-        <location line="+11"/>
+        <location line="+12"/>
         <source>No scheme to show</source>
         <translation>没有可以展示的方案</translation>
     </message>
     <message>
         <location line="-40"/>
-        <location line="+42"/>
+        <location line="+45"/>
         <source>New</source>
         <translation>新建</translation>
     </message>
     <message>
-        <location line="-32"/>
+        <location line="-34"/>
         <source>One file per line: file_path, open_mode</source>
         <translation>每行一个：文件路径, 打开方式</translation>
     </message>
     <message>
-        <location line="+36"/>
+        <location line="+38"/>
         <source>Delete</source>
         <translation>删除</translation>
     </message>
     <message>
-        <location line="+5"/>
+        <location line="+6"/>
         <source>Scheme</source>
         <translation>方案</translation>
     </message>
     <message>
-        <location line="+19"/>
+        <location line="+24"/>
         <source>Folder</source>
         <translation>文件夹</translation>
     </message>
     <message>
-        <location line="+5"/>
+        <location line="+6"/>
         <source>Empty to use current explored folder dynamically</source>
         <translation>留空则动态使用当前浏览的文件夹</translation>
     </message>
@@ -9664,27 +10332,27 @@ The legacy notebook would be kept for data backup.</source>
         <translation>选择快速笔记文件夹</translation>
     </message>
     <message>
-        <location line="-54"/>
+        <location line="-65"/>
         <source>Quick access:</source>
         <translation>快速访问：</translation>
     </message>
     <message>
-        <location line="+58"/>
+        <location line="+69"/>
         <source>Snippet variables are supported, e.g. journal/%yyyy%/%MM%</source>
         <translation>支持片段变量，例如 journal/%yyyy%/%MM%</translation>
     </message>
     <message>
-        <location line="+8"/>
+        <location line="+12"/>
         <source>Note name</source>
         <translation>文件名</translation>
     </message>
     <message>
-        <location line="+10"/>
+        <location line="+11"/>
         <source>Template</source>
         <translation>模板</translation>
     </message>
     <message>
-        <location line="+186"/>
+        <location line="+192"/>
         <source>Quick Note Scheme</source>
         <translation>快速笔记方案</translation>
     </message>
@@ -9709,7 +10377,7 @@ The legacy notebook would be kept for data backup.</source>
         <translation>删除快速笔记方案（%1）？</translation>
     </message>
     <message>
-        <location line="-204"/>
+        <location line="-205"/>
         <source>Open in detached window</source>
         <translation>在独立窗口中打开</translation>
     </message>
@@ -10097,7 +10765,7 @@ The legacy notebook would be kept for data backup.</source>
 <context>
     <name>vnotex::SettingsWidget</name>
     <message>
-        <location filename="../../../widgets/settingswidget.cpp" line="+107"/>
+        <location filename="../../../widgets/settingswidget.cpp" line="+109"/>
         <source>Settings</source>
         <translation>设置</translation>
     </message>
@@ -10122,7 +10790,7 @@ The legacy notebook would be kept for data backup.</source>
         <translation>搜索</translation>
     </message>
     <message>
-        <location line="+255"/>
+        <location line="+265"/>
         <source>A restart of VNote may be needed to make changes take effect. Restart VNote now?</source>
         <translation>可能需要重启 VNote 才能使更改生效。立即重启 VNote？</translation>
     </message>
@@ -10296,7 +10964,7 @@ The legacy notebook would be kept for data backup.</source>
 <context>
     <name>vnotex::SortDialog2</name>
     <message>
-        <location filename="../../../widgets/dialogs/sortdialog2.cpp" line="+139"/>
+        <location filename="../../../widgets/dialogs/sortdialog2.cpp" line="+148"/>
         <source>Name</source>
         <translation>名称</translation>
     </message>
@@ -10781,7 +11449,7 @@ Notebook: %3</source>
 <context>
     <name>vnotex::TaskController</name>
     <message>
-        <location filename="../../../controllers/taskcontroller.cpp" line="+59"/>
+        <location filename="../../../controllers/taskcontroller.cpp" line="+57"/>
         <location line="+14"/>
         <source>Task folder is not available.</source>
         <translation>任务文件夹不可用。</translation>
@@ -10811,7 +11479,7 @@ Notebook: %3</source>
 <context>
     <name>vnotex::TaskPanel2</name>
     <message>
-        <location filename="../../../widgets/taskpanel2.cpp" line="+61"/>
+        <location filename="../../../widgets/taskpanel2.cpp" line="+62"/>
         <source>Task</source>
         <translation>任务</translation>
     </message>
@@ -10863,6 +11531,16 @@ This removes the file and any sub-tasks it contains: %2</source>
         <translation>确定要删除 “%1” 的任务文件吗？
 
 这将移除该文件及其包含的所有子任务：%2</translation>
+    </message>
+</context>
+<context>
+    <name>vnotex::TaskService</name>
+    <message>
+        <location filename="../../../core/services/taskservice.cpp" line="+122"/>
+        <source>Task (%1) was not run because notebook trust could not be saved.
+</source>
+        <translation>任务（%1）未运行，因为无法保存笔记本信任设置。
+</translation>
     </message>
 </context>
 <context>
@@ -11096,7 +11774,7 @@ This removes the file and any sub-tasks it contains: %2</source>
 <context>
     <name>vnotex::ThemePage</name>
     <message>
-        <location filename="../../../widgets/dialogs/settings/themepage.cpp" line="+41"/>
+        <location filename="../../../widgets/dialogs/settings/themepage.cpp" line="+44"/>
         <source>Refresh</source>
         <translation>刷新</translation>
     </message>
@@ -11106,8 +11784,8 @@ This removes the file and any sub-tasks it contains: %2</source>
         <translation>打开所在文件夹</translation>
     </message>
     <message>
-        <location line="-18"/>
-        <location line="+55"/>
+        <location line="-20"/>
+        <location line="+56"/>
         <location line="+28"/>
         <source>Theme</source>
         <translation>主题</translation>
@@ -11167,7 +11845,7 @@ This removes the file and any sub-tasks it contains: %2</source>
 <context>
     <name>vnotex::ToolTipService</name>
     <message>
-        <location filename="../../../gui/services/tooltipservice.cpp" line="+168"/>
+        <location filename="../../../gui/services/tooltipservice.cpp" line="+160"/>
         <source>VNote Tip</source>
         <translation>VNote 使用技巧</translation>
     </message>
@@ -11233,7 +11911,7 @@ This removes the file and any sub-tasks it contains: %2</source>
 <context>
     <name>vnotex::TypstViewWindow</name>
     <message>
-        <location filename="../../../widgets/typstviewwindow.cpp" line="+302"/>
+        <location filename="../../../widgets/typstviewwindow.cpp" line="+303"/>
         <source>Unable to clean up an uncommitted Typst resource</source>
         <translation>无法清理尚未完成插入的 Typst 资源</translation>
     </message>
@@ -11327,7 +12005,7 @@ This removes the file and any sub-tasks it contains: %2</source>
         <translation>无法将所选文件作为附件添加到此笔记</translation>
     </message>
     <message>
-        <location line="+206"/>
+        <location line="+210"/>
         <source>&amp;View Image</source>
         <translation>查看图片(&amp;V)</translation>
     </message>
@@ -11363,12 +12041,12 @@ This removes the file and any sub-tasks it contains: %2</source>
         <translation>图片源已更改，或无法安全调整其大小</translation>
     </message>
     <message>
-        <location line="+191"/>
+        <location line="+197"/>
         <source>Paste as Plain Text</source>
         <translation>粘贴为纯文本</translation>
     </message>
     <message>
-        <location line="+52"/>
+        <location line="+54"/>
         <source>Previous Page</source>
         <translation>上一页</translation>
     </message>
@@ -11393,18 +12071,18 @@ This removes the file and any sub-tasks it contains: %2</source>
         <translation>在 Typst 预览中使用主题颜色作为默认页面背景和文本颜色；文档显式指定的样式优先，导出不受影响</translation>
     </message>
     <message>
-        <location line="+290"/>
+        <location line="+320"/>
         <source>Unable to read the Typst source: %1</source>
         <translation>无法读取 Typst 源文件：%1</translation>
     </message>
     <message>
-        <location line="+272"/>
+        <location line="+745"/>
         <location line="+7"/>
         <source>Unable to open the Typst source location</source>
         <translation>无法打开 Typst 源文件位置</translation>
     </message>
     <message>
-        <location line="+132"/>
+        <location line="+137"/>
         <source>Presentation Mode</source>
         <translation>演示模式</translation>
     </message>
@@ -11434,9 +12112,9 @@ This removes the file and any sub-tasks it contains: %2</source>
         <translation>Typst 需要可用且未加密的文档缓冲区</translation>
     </message>
     <message>
-        <location line="+269"/>
+        <location line="+270"/>
         <location line="+11"/>
-        <location line="+17"/>
+        <location line="+18"/>
         <source>Unable to open the Typst source location</source>
         <translation>无法打开 Typst 源文件位置</translation>
     </message>
@@ -11617,33 +12295,23 @@ This removes the file and any sub-tasks it contains: %2</source>
 <context>
     <name>vnotex::UnitedEntry</name>
     <message>
-        <location filename="../../../unitedentry/unitedentry.cpp" line="+79"/>
-        <location line="+101"/>
+        <location filename="../../../unitedentry/unitedentry.cpp" line="+78"/>
+        <location line="+76"/>
         <source>United Entry</source>
         <translation>统一入口</translation>
     </message>
     <message>
-        <location line="-84"/>
-        <source>Type to command</source>
-        <translation>输入命令</translation>
+        <location line="-59"/>
+        <source>Type to search files by name in all notebooks</source>
+        <translation>输入以按文件名搜索所有笔记本</translation>
     </message>
     <message>
-        <location line="+43"/>
-        <source>Options</source>
-        <translation>选项</translation>
-    </message>
-    <message>
-        <location line="+7"/>
-        <source>Expand All</source>
-        <translation>全部展开</translation>
-    </message>
-    <message>
-        <location line="+17"/>
+        <location line="+42"/>
         <source>Busy</source>
         <translation>忙</translation>
     </message>
     <message>
-        <location line="+278"/>
+        <location line="+288"/>
         <source>Unknown entry: %1</source>
         <translation>未知入口：%1</translation>
     </message>
@@ -11656,6 +12324,11 @@ This removes the file and any sub-tasks it contains: %2</source>
         <location line="+0"/>
         <source>Description</source>
         <translation>描述</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>Show and run entries &gt;</source>
+        <translation>显示并运行入口 &gt;</translation>
     </message>
 </context>
 <context>
@@ -11672,9 +12345,27 @@ This removes the file and any sub-tasks it contains: %2</source>
     </message>
 </context>
 <context>
+    <name>vnotex::UnitedEntryPage</name>
+    <message>
+        <location filename="../../../widgets/dialogs/settings/unitedentrypage.cpp" line="+45"/>
+        <source>United Entry</source>
+        <translation>统一入口</translation>
+    </message>
+    <message>
+        <location line="-22"/>
+        <source>Expand All</source>
+        <translation>全部展开</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>Automatically expand result groups in United Entry</source>
+        <translation>自动展开统一入口中的结果分组</translation>
+    </message>
+</context>
+<context>
     <name>vnotex::UpdateController</name>
     <message>
-        <location filename="../../../controllers/updatecontroller.cpp" line="+232"/>
+        <location filename="../../../controllers/updatecontroller.cpp" line="+234"/>
         <source>Update Available</source>
         <translation>有可用更新</translation>
     </message>
@@ -11822,12 +12513,12 @@ This removes the file and any sub-tasks it contains: %2</source>
 <context>
     <name>vnotex::UpdateDialog</name>
     <message>
-        <location filename="../../../widgets/dialogs/updatedialog.cpp" line="+19"/>
+        <location filename="../../../widgets/dialogs/updatedialog.cpp" line="+20"/>
         <source>Check for Updates</source>
         <translation>检查更新</translation>
     </message>
     <message>
-        <location line="+28"/>
+        <location line="+31"/>
         <source>Open Release Page</source>
         <translation>打开发布页面</translation>
     </message>
@@ -11852,7 +12543,7 @@ This removes the file and any sub-tasks it contains: %2</source>
         <translation>您当前的版本为 %1。</translation>
     </message>
     <message>
-        <location line="+4"/>
+        <location line="+3"/>
         <source>Close</source>
         <translation>关闭</translation>
     </message>
@@ -11867,21 +12558,37 @@ This removes the file and any sub-tasks it contains: %2</source>
         <translation>您当前的版本为 %1。请打开发布页面下载新版本并自行安装。</translation>
     </message>
     <message>
-        <location line="+22"/>
+        <location line="+14"/>
         <source>Could not check for updates: %1</source>
         <translation>无法检查更新：%1</translation>
+    </message>
+    <message>
+        <location filename="../../../widgets/dialogs/updatedialog.cpp" line="80"/>
+        <source>Update Now</source>
+        <translation>立即更新</translation>
+    </message>
+    <message>
+        <location filename="../../../widgets/dialogs/updatedialog.cpp" line="79"/>
+        <source>Update Now downloads the update, then closes and reopens VNote.</source>
+        <translation>“立即更新”将下载更新，然后关闭并重新打开 VNote。</translation>
+    </message>
+    <message>
+        <location filename="../../../widgets/dialogs/updatedialog.cpp" line="101"/>
+        <source>An update is already in progress. Follow the updater window.</source>
+        <translation>已有更新正在进行，请查看更新程序窗口。</translation>
     </message>
 </context>
 <context>
     <name>vnotex::UpdateService</name>
     <message>
-        <location filename="../../../core/services/updateservice.cpp" line="+206"/>
+        <location filename="../../../core/services/updateservice.cpp" line="+174"/>
+        <location line="+44"/>
         <source>Refusing to contact an unexpected host: %1</source>
         <translation>拒绝连接到非预期的主机：%1</translation>
     </message>
     <message>
-        <location line="-4"/>
-        <location line="+35"/>
+        <location line="-48"/>
+        <location line="+20"/>
         <source>Cancelled.</source>
         <translation>已取消。</translation>
     </message>
@@ -11891,19 +12598,15 @@ This removes the file and any sub-tasks it contains: %2</source>
         <translation>对 %1 的请求超时。</translation>
     </message>
     <message>
-        <location line="+9"/>
-        <location line="+25"/>
+        <location line="+18"/>
+        <location line="+32"/>
         <source>Too many redirects.</source>
         <translation>重定向次数过多。</translation>
     </message>
     <message>
-        <location line="-44"/>
-        <location line="+36"/>
-        <source>The response from %1 is unexpectedly large.</source>
-        <translation>%1 返回的响应过大。</translation>
-    </message>
-    <message>
-        <location line="+105"/>
+        <location line="-66"/>
+        <location line="+30"/>
+        <location line="+18"/>
         <source>The latest release could not be identified.</source>
         <translation>无法识别最新版本。</translation>
     </message>
@@ -11948,12 +12651,12 @@ This removes the file and any sub-tasks it contains: %2</source>
 <context>
     <name>vnotex::ViewArea2</name>
     <message>
-        <location filename="../../../widgets/viewarea2.cpp" line="+915"/>
+        <location filename="../../../widgets/viewarea2.cpp" line="-83"/>
         <source>The outline has changed. Reopen the mind map to navigate.</source>
         <translation>大纲已更改。请重新打开思维导图以进行导航。</translation>
     </message>
     <message>
-        <location line="+380"/>
+        <location line="+543"/>
         <source>New Workspace</source>
         <translation>新建工作区</translation>
     </message>
@@ -11972,7 +12675,7 @@ This removes the file and any sub-tasks it contains: %2</source>
 <context>
     <name>vnotex::ViewAreaController</name>
     <message>
-        <location filename="../../../controllers/viewareacontroller.cpp" line="+321"/>
+        <location filename="../../../controllers/viewareacontroller.cpp" line="+322"/>
         <source>The note encryption services are unavailable.</source>
         <translation>笔记加密服务不可用。</translation>
     </message>
@@ -11998,7 +12701,7 @@ This removes the file and any sub-tasks it contains: %2</source>
         <translation>无法保存待保存的批注。</translation>
     </message>
     <message>
-        <location line="+129"/>
+        <location line="+133"/>
         <source>The workspace service is unavailable.</source>
         <translation>工作区服务不可用。</translation>
     </message>
@@ -12013,18 +12716,19 @@ This removes the file and any sub-tasks it contains: %2</source>
         <translation>确认后笔记发生变化。未转换任何内容，请重试。</translation>
     </message>
     <message>
-        <location line="-399"/>
+        <location line="-403"/>
         <source>Note conversion requires a writable managed note.</source>
         <translation>笔记转换需要由 VNote 管理的可写笔记。</translation>
     </message>
     <message>
         <location line="-247"/>
         <location line="+18"/>
+        <location line="+1813"/>
         <source>Unable to create a mind map from this outline</source>
         <translation>无法根据此大纲创建思维导图</translation>
     </message>
     <message>
-        <location line="+22"/>
+        <location line="-1791"/>
         <source>No outline is available for a mind map</source>
         <translation>没有可用于创建思维导图的大纲</translation>
     </message>
@@ -12036,14 +12740,14 @@ This removes the file and any sub-tasks it contains: %2</source>
     </message>
     <message>
         <location line="-70"/>
-        <location line="+535"/>
+        <location line="+540"/>
         <location line="+5"/>
         <location line="+11"/>
         <source>Closing a link preview was cancelled.</source>
         <translation>关闭链接预览已取消。</translation>
     </message>
     <message>
-        <location line="-547"/>
+        <location line="-552"/>
         <source>A protected operation is in progress. Retry conversion.</source>
         <translation>受保护的操作正在进行中，请重试转换。</translation>
     </message>
@@ -12060,17 +12764,17 @@ This removes the file and any sub-tasks it contains: %2</source>
     </message>
     <message>
         <location line="+43"/>
-        <location line="+230"/>
+        <location line="+234"/>
         <source>Open this note and recover or discard its pending backup before decrypting it.</source>
         <translation>请打开此笔记，恢复或丢弃其待处理的备份后再解密。</translation>
     </message>
     <message>
-        <location line="-228"/>
+        <location line="-232"/>
         <source>The note could not be read for conversion.</source>
         <translation>无法读取笔记以进行转换。</translation>
     </message>
     <message>
-        <location line="+79"/>
+        <location line="+83"/>
         <source>Note conversion needs recovery. Restart VNote before editing or syncing.</source>
         <translation>笔记转换需要恢复。请重启 VNote 后再编辑或同步。</translation>
     </message>
@@ -12131,7 +12835,7 @@ This removes the file and any sub-tasks it contains: %2</source>
     </message>
     <message>
         <location line="+48"/>
-        <location line="+4"/>
+        <location line="+5"/>
         <location line="+29"/>
         <source>A protected operation is in progress. Finish it before locking.</source>
         <translation>受保护内容的操作正在进行。请完成后再锁定。</translation>
@@ -12178,31 +12882,66 @@ This removes the file and any sub-tasks it contains: %2</source>
         <translation>受保护缓冲区正忙。密钥仍可用。</translation>
     </message>
     <message>
-        <location line="+137"/>
+        <location line="+310"/>
+        <location line="+3"/>
+        <location line="+19"/>
+        <location line="+6"/>
+        <source>The source outline has changed. Reopen the mind map to edit.</source>
+        <translation>源文档大纲已更改。请重新打开思维导图以进行编辑。</translation>
+    </message>
+    <message>
+        <location line="-22"/>
+        <source>The source outline is still updating.</source>
+        <translation>源文档大纲仍在更新。</translation>
+    </message>
+    <message>
+        <location line="+5"/>
+        <source>The source outline is not editable.</source>
+        <translation>源文档大纲不可编辑。</translation>
+    </message>
+    <message>
+        <location line="+20"/>
+        <source>The source outline is not ready for editing.</source>
+        <translation>源文档大纲尚未准备好进行编辑。</translation>
+    </message>
+    <message>
+        <location line="+5"/>
+        <source>This change is not supported by the source outline.</source>
+        <translation>源文档大纲不支持此更改。</translation>
+    </message>
+    <message>
+        <location line="+113"/>
+        <source>The source rejected this outline change.</source>
+        <translation>源文档拒绝了此大纲更改。</translation>
+    </message>
+    <message>
+        <location line="+305"/>
         <source>The outline has changed. Reopen the mind map to navigate.</source>
         <translation>大纲已更改。请重新打开思维导图以进行导航。</translation>
     </message>
     <message>
-        <location line="+103"/>
+        <location line="+107"/>
         <location line="+5"/>
-        <location line="+51"/>
-        <location line="+19"/>
+        <location line="+5"/>
+        <location line="+66"/>
+        <location line="+17"/>
         <location line="+16"/>
         <source>Unable to open the outline mind map</source>
         <translation>无法打开大纲思维导图</translation>
     </message>
     <message>
-        <location line="-82"/>
+        <location line="-271"/>
+        <location line="+181"/>
         <source>Document</source>
         <translation>文档</translation>
     </message>
     <message>
-        <location line="+11"/>
+        <location line="+20"/>
         <source>Mind Map: %1</source>
         <translation>思维导图：%1</translation>
     </message>
     <message>
-        <location line="+637"/>
+        <location line="+645"/>
         <source>Preview</source>
         <translation>预览</translation>
     </message>
@@ -12210,12 +12949,17 @@ This removes the file and any sub-tasks it contains: %2</source>
 <context>
     <name>vnotex::ViewSplit2</name>
     <message>
-        <location filename="../../../widgets/viewsplit2.cpp" line="+211"/>
+        <location filename="../../../widgets/viewsplit2.cpp" line="+245"/>
         <source>Stay on Top</source>
         <translation>置顶</translation>
     </message>
     <message>
-        <location line="+36"/>
+        <location line="+28"/>
+        <source>Attach to Main Window</source>
+        <translation>附加到主窗口</translation>
+    </message>
+    <message>
+        <location line="+19"/>
         <source>Open Windows</source>
         <translation>已打开窗口</translation>
     </message>
@@ -12225,7 +12969,7 @@ This removes the file and any sub-tasks it contains: %2</source>
         <translation>菜单</translation>
     </message>
     <message>
-        <location line="+27"/>
+        <location line="+56"/>
         <source>No Window To Show</source>
         <translation>没有可显示的窗口</translation>
     </message>
@@ -12295,7 +13039,7 @@ This removes the file and any sub-tasks it contains: %2</source>
         <translation>移除分屏与工作区</translation>
     </message>
     <message>
-        <location line="+363"/>
+        <location line="+387"/>
         <source>Reload content from its source, discarding unsaved changes</source>
         <translation>从源重新加载内容，放弃未保存的更改</translation>
     </message>
@@ -12447,7 +13191,7 @@ This removes the file and any sub-tasks it contains: %2</source>
         <translation>选择片段</translation>
     </message>
     <message>
-        <location filename="../../../widgets/viewwindow2.cpp" line="+417"/>
+        <location filename="../../../widgets/viewwindow2.cpp" line="+430"/>
         <source>Your changes will be lost if you don&apos;t save them.</source>
         <translation>不保存的话更改将会丢失。</translation>
     </message>
@@ -12478,13 +13222,13 @@ This removes the file and any sub-tasks it contains: %2</source>
     </message>
     <message>
         <location line="+37"/>
-        <location line="+542"/>
+        <location line="+557"/>
         <source>Failed to save note (%1).</source>
         <translation>无法保存笔记(%1)。</translation>
     </message>
     <message>
-        <location line="-538"/>
-        <location line="+510"/>
+        <location line="-553"/>
+        <location line="+525"/>
         <location line="+132"/>
         <source>Unable to read the editor content</source>
         <translation>无法读取编辑器内容</translation>
@@ -12597,14 +13341,14 @@ Continue?</source>
         <translation>笔记路径(%1)。</translation>
     </message>
     <message>
-        <location line="-1711"/>
+        <location line="-1738"/>
         <source>Unable to open another note: comments could not be saved</source>
         <translation>无法打开其他笔记：批注未能保存</translation>
     </message>
     <message>
         <location line="+56"/>
         <location line="+5"/>
-        <location line="+492"/>
+        <location line="+520"/>
         <location line="+73"/>
         <location line="+46"/>
         <location line="+26"/>
@@ -12613,12 +13357,12 @@ Continue?</source>
         <translation>只读，无法编辑</translation>
     </message>
     <message>
-        <location line="-489"/>
+        <location line="-505"/>
         <source>Close note (%1) with unsaved changes?</source>
         <translation>笔记（%1）有未保存的更改，是否关闭？</translation>
     </message>
     <message>
-        <location line="+913"/>
+        <location line="+928"/>
         <source>This file is read-only (%1). Changes cannot be saved.</source>
         <translation>此文件为只读（%1），无法保存更改。</translation>
     </message>
@@ -12630,7 +13374,7 @@ Continue?</source>
         </translation>
     </message>
     <message>
-        <location filename="../../../widgets/viewwindow2.h" line="+155"/>
+        <location filename="../../../widgets/viewwindow2.h" line="+175"/>
         <source>Tools</source>
         <translation>工具</translation>
     </message>
@@ -12717,6 +13461,69 @@ Continue?</source>
     </message>
 </context>
 <context>
+    <name>vnotex::WindowsContextMenuController</name>
+    <message>
+        <location filename="../../../controllers/windowscontextmenucontroller.cpp" line="+26"/>
+        <source>Failed to start Windows PowerShell: %1</source>
+        <translation>无法启动 Windows PowerShell：%1</translation>
+    </message>
+    <message>
+        <location line="+8"/>
+        <source>Added the VNote actions to the system context menu.</source>
+        <translation>已将 VNote 操作添加到系统右键菜单。</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Removed the VNote actions from the system context menu.</source>
+        <translation>已从系统右键菜单移除 VNote 操作。</translation>
+    </message>
+    <message>
+        <location line="+6"/>
+        <source>The context menu helper stopped unexpectedly.</source>
+        <translation>右键菜单辅助程序意外停止。</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Failed to update the system context menu (exit code %1).</source>
+        <translation>无法更新系统右键菜单（退出代码 %1）。</translation>
+    </message>
+    <message>
+        <location line="+21"/>
+        <source>Adding the VNote context menu actions...</source>
+        <translation>正在添加 VNote 右键菜单操作...</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Removing the VNote context menu actions...</source>
+        <translation>正在移除 VNote 右键菜单操作...</translation>
+    </message>
+    <message>
+        <location line="+40"/>
+        <source>The installed context menu helper is missing: %1</source>
+        <translation>缺少已安装的右键菜单辅助脚本：%1</translation>
+    </message>
+    <message>
+        <location line="+8"/>
+        <source>Could not locate the Windows system directory.</source>
+        <translation>无法找到 Windows 系统目录。</translation>
+    </message>
+    <message>
+        <location line="+8"/>
+        <source>Windows PowerShell is unavailable at %1.</source>
+        <translation>Windows PowerShell 在 %1 不可用。</translation>
+    </message>
+    <message>
+        <location line="-48"/>
+        <source>The built-in file types are unavailable.</source>
+        <translation>内置文件类型不可用。</translation>
+    </message>
+    <message>
+        <location line="+19"/>
+        <source>A built-in file suffix is invalid for the Windows context menu: %1</source>
+        <translation>内置文件后缀无法用于 Windows 右键菜单：%1</translation>
+    </message>
+</context>
+<context>
     <name>vnotex::WindowsUnitedEntry</name>
     <message>
         <location filename="../../../unitedentry/windowsunitedentry.cpp" line="+23"/>
@@ -12797,223 +13604,6 @@ Continue?</source>
     </message>
 </context>
 <context>
-    <name>vnotex::HttpApiConfig</name>
-    <message>
-        <source>HTTP API settings contain missing fields or invalid value types.</source>
-        <translation>HTTP API 设置缺少字段或包含无效的值类型。</translation>
-    </message>
-    <message>
-        <source>The HTTP API port must be an integer from 1 to 65535.</source>
-        <translation>HTTP API 端口必须是 1 至 65535 的整数。</translation>
-    </message>
-    <message>
-        <source>The HTTP API address must be a literal loopback address, such as 127.0.0.1 or ::1.</source>
-        <translation>HTTP API 地址必须是回环 IP 地址，例如 127.0.0.1 或 ::1。</translation>
-    </message>
-</context>
-<context>
-    <name>vnotex::HttpApiPage</name>
-    <message>
-        <source>Never</source>
-        <translation>永不过期</translation>
-    </message>
-    <message>
-        <source>New</source>
-        <translation>新建</translation>
-    </message>
-    <message>
-        <source>HTTP API</source>
-        <translation>HTTP API</translation>
-    </message>
-    <message>
-        <source>For remote access, configure an HTTPS reverse proxy on this computer. VNote listens only on loopback and does not install a proxy or open firewall ports.</source>
-        <translation>如需远程访问，请在此计算机上配置 HTTPS 反向代理。VNote 仅监听回环地址，不会安装代理或开放防火墙端口。</translation>
-    </message>
-    <message>
-        <source>Enable HTTP API</source>
-        <translation>启用 HTTP API</translation>
-    </message>
-    <message>
-        <source>Loopback address</source>
-        <translation>回环地址</translation>
-    </message>
-    <message>
-        <source>Use a literal loopback address, such as 127.0.0.1 or ::1</source>
-        <translation>使用回环 IP 地址，例如 127.0.0.1 或 ::1</translation>
-    </message>
-    <message>
-        <source>Port</source>
-        <translation>端口</translation>
-    </message>
-    <message>
-        <source>Use a port from 1 to 65535; an occupied port is not replaced automatically</source>
-        <translation>使用 1 至 65535 的端口；端口被占用时不会自动更换</translation>
-    </message>
-    <message>
-        <source>Client Tokens</source>
-        <translation>客户端令牌</translation>
-    </message>
-    <message>
-        <source>Tokens can be managed while the listener is disabled. Issuing and revoking take effect immediately and are not undone by Reset. To change permissions, revoke the token and issue a new one. Future notebooks are never granted automatically.</source>
-        <translation>监听器停用时仍可管理令牌。签发和撤销会立即生效，且无法通过重置撤销。要更改权限，请撤销令牌并签发新令牌。今后添加的笔记本不会自动获得授权。</translation>
-    </message>
-    <message>
-        <source>Client</source>
-        <translation>客户端</translation>
-    </message>
-    <message>
-        <source>Token ID</source>
-        <translation>令牌 ID</translation>
-    </message>
-    <message>
-        <source>Permissions</source>
-        <translation>权限</translation>
-    </message>
-    <message>
-        <source>Notebooks</source>
-        <translation>笔记本</translation>
-    </message>
-    <message>
-        <source>Expires</source>
-        <translation>到期时间</translation>
-    </message>
-    <message>
-        <source>Status</source>
-        <translation>状态</translation>
-    </message>
-    <message>
-        <source>Revoke</source>
-        <translation>撤销</translation>
-    </message>
-    <message>
-        <source>Refresh</source>
-        <translation>刷新</translation>
-    </message>
-    <message>
-        <source>HTTP API controller is unavailable.</source>
-        <translation>HTTP API 控制器不可用。</translation>
-    </message>
-    <message>
-        <source>Expired</source>
-        <translation>已过期</translation>
-    </message>
-    <message>
-        <source>Active</source>
-        <translation>有效</translation>
-    </message>
-    <message>
-        <source>Disabled</source>
-        <translation>已停用</translation>
-    </message>
-    <message>
-        <source>Revoke Token</source>
-        <translation>撤销令牌</translation>
-    </message>
-    <message>
-        <source>Revoke this token? Queued requests lose access immediately; already committed changes cannot be undone.</source>
-        <translation>是否撤销此令牌？排队中的请求会立即失去访问权限；已提交的更改无法撤销。</translation>
-    </message>
-</context>
-<context>
-    <name>vnotex::NewHttpApiTokenDialog</name>
-    <message>
-        <source>Copy</source>
-        <translation>复制</translation>
-    </message>
-    <message>
-        <source>Expiry</source>
-        <translation>有效期</translation>
-    </message>
-    <message>
-        <source>1 day</source>
-        <translation>1 天</translation>
-    </message>
-    <message>
-        <source>7 days</source>
-        <translation>7 天</translation>
-    </message>
-    <message>
-        <source>30 days</source>
-        <translation>30 天</translation>
-    </message>
-    <message>
-        <source>60 days</source>
-        <translation>60 天</translation>
-    </message>
-    <message>
-        <source>90 days</source>
-        <translation>90 天</translation>
-    </message>
-    <message>
-        <source>180 days</source>
-        <translation>180 天</translation>
-    </message>
-    <message>
-        <source>Never</source>
-        <translation>永不过期</translation>
-    </message>
-    <message>
-        <source>Issue Client Token</source>
-        <translation>签发客户端令牌</translation>
-    </message>
-    <message>
-        <source>Choose explicit notebook grants and permissions. Live reads may expose unsaved editor text. Write changes notes; trash moves notes to the recycle bin.</source>
-        <translation>请选择明确的笔记本授权和权限。实时读取可能会暴露编辑器中尚未保存的文本。写入会更改笔记；移至回收站会将笔记放入回收站。</translation>
-    </message>
-    <message>
-        <source>Client label</source>
-        <translation>客户端标签</translation>
-    </message>
-    <message>
-        <source>Allowed notebooks</source>
-        <translation>允许访问的笔记本</translation>
-    </message>
-    <message>
-        <source>Select one or more notebooks for access</source>
-        <translation>选择一个或多个允许访问的笔记本</translation>
-    </message>
-    <message>
-        <source>Read saved notes and search (notes:read)</source>
-        <translation>读取已保存的笔记和搜索 (notes:read)</translation>
-    </message>
-    <message>
-        <source>Read live editor text (notes:read-live)</source>
-        <translation>读取编辑器实时文本 (notes:read-live)</translation>
-    </message>
-    <message>
-        <source>Create and edit notes (notes:write)</source>
-        <translation>创建和编辑笔记 (notes:write)</translation>
-    </message>
-    <message>
-        <source>Trash notes (notes:trash)</source>
-        <translation>将笔记移至回收站 (notes:trash)</translation>
-    </message>
-    <message>
-        <source>Issue Token</source>
-        <translation>签发令牌</translation>
-    </message>
-    <message>
-        <source>Enter a client label, select at least one notebook and permission, and choose a valid expiry option.</source>
-        <translation>请输入客户端标签，选择至少一个笔记本和一项权限，并选择有效的有效期选项。</translation>
-    </message>
-    <message>
-        <source>Token Issued</source>
-        <translation>令牌已签发</translation>
-    </message>
-    <message>
-        <source>Copy this bearer token now and keep it private. It will not be shown again.</source>
-        <translation>请立即复制此持有者令牌并妥善保密。之后将无法再次查看。</translation>
-    </message>
-    <message>
-        <source>Permissions</source>
-        <translation>权限</translation>
-    </message>
-    <message>
-        <source>HTTP API controller is unavailable.</source>
-        <translation>HTTP API 控制器不可用。</translation>
-    </message>
-</context>
-<context>
     <name>ApiAuth</name>
     <message>
         <source>Token administration must run on the owner thread</source>
@@ -13034,61 +13624,6 @@ Continue?</source>
     <message>
         <source>The token no longer exists</source>
         <translation>令牌已不存在</translation>
-    </message>
-</context>
-<context>
-    <name>vnotex::HttpApiController</name>
-    <message>
-        <source>Token revocation failed</source>
-        <translation>令牌撤销失败</translation>
-    </message>
-    <message>
-        <source>Service disabled</source>
-        <translation>服务已停用</translation>
-    </message>
-    <message>
-        <source>HTTP API configuration is unavailable</source>
-        <translation>HTTP API 配置不可用</translation>
-    </message>
-    <message>
-        <source>Could not load HTTP API credentials (%1)</source>
-        <translation>无法加载 HTTP API 凭据（%1）</translation>
-    </message>
-    <message>
-        <source>HTTP API is shutting down</source>
-        <translation>HTTP API 正在关闭</translation>
-    </message>
-    <message>
-        <source>Invalid HTTP API settings: %1</source>
-        <translation>HTTP API 设置无效：%1</translation>
-    </message>
-    <message>
-        <source>Waiting for application startup</source>
-        <translation>正在等待应用启动完成</translation>
-    </message>
-    <message>
-        <source>Could not start HTTP API (%1)</source>
-        <translation>无法启动 HTTP API（%1）</translation>
-    </message>
-    <message>
-        <source>Listening on %1</source>
-        <translation>正在监听 %1</translation>
-    </message>
-    <message>
-        <source>Stopped</source>
-        <translation>已停止</translation>
-    </message>
-    <message>
-        <source>Select at least one available notebook</source>
-        <translation>请选择至少一个可用的笔记本</translation>
-    </message>
-    <message>
-        <source>Could not issue an HTTP API token (%1)</source>
-        <translation>无法签发 HTTP API 令牌（%1）</translation>
-    </message>
-    <message>
-        <source>Token access is blocked for this session, but revocation could not be saved (%1). The HTTP API has been stopped.</source>
-        <translation>本次会话中已阻止令牌访问，但无法保存撤销记录（%1）。HTTP API 已停止。</translation>
     </message>
 </context>
 </TS>

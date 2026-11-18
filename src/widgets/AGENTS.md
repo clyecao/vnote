@@ -28,12 +28,13 @@ overflow menu (rotate, cursor, scroll mode, spread mode, presentation, document
 properties) was simply gone.
 
 With the menu on the action both surfaces work from one declaration:
-`QToolButton::menu()` falls back to `defaultAction()->menu()` on the toolbar, and
-`QMenu` renders an action-with-a-menu as a **submenu** inside the extension
-popup. It also makes the icon reachable by
+the tool button's popup uses `defaultAction()->menu()`, and `QMenu` renders an
+action-with-a-menu as a **submenu** inside the extension popup. Query `action->menu()`
+when connecting menu signals: `QToolButton::menu()` only returns a menu explicitly
+installed on the button. Keep `MenuButtonPopup` for a primary click plus dropdown,
+as with Markdown headings. Action ownership also makes the icon reachable by
 `ViewWindowToolBarHelper2::refreshToolBarIcons()`, which recursively visits the
-toolbar actions and their action-owned menus. Precedents: `Outline` / `Tag` / `Attachment` in
-`viewwindowtoolbarhelper2.cpp`. Gate:
+toolbar actions and their action-owned menus. Gate:
 `theOverflowMenuSurvivesANarrowToolBar` in `tests/widgets/test_pdfviewertoolbar.cpp`,
 which resizes a real toolbar until it overflows.
 
@@ -123,6 +124,71 @@ Boundary, selection, undo, wrapping, and parent-shortcut coverage: `test_plainte
 `MindMapEditor::createNoteEditor()` returns `PlainTextEdit` for m3's node-properties Note
 field, in both embedded and separated panels. Inline topic editors remain unchanged.
 `test_mindmapeditor::noteEditorShortcuts` covers deferred initialization, policy and persistence.
+
+### Embedded Markdown source
+
+Use `SimpleMarkdownEditor` (`editors/simplemarkdowneditor.{h,cpp}`) to display or edit
+in-memory Markdown without a `Buffer2`, notebook, controller or `ViewWindow2`:
+
+```cpp
+auto *editor = new SimpleMarkdownEditor(services, this);
+editor->setPlainText(markdown);
+editor->setReadOnly(true); // Omit for editable content.
+layout->addWidget(editor);
+```
+
+Register `ThemeService` and an initialized `ConfigMgr2`; the locator and both services must
+outlive the widget.
+The widget derives from `vte::VMarkdownEditor`, not `QTextEdit`. `setPlainText()` and
+inherited `setText()` both load literal Markdown source, never auto-detected HTML.
+`toPlainText()` returns that source and `textChanged()` forwards the underlying editor's
+notification (which can also report formatting changes). `getTextEdit()` exposes the
+underlying `vte::VTextEdit` for cursor, selection and other advanced text operations.
+
+It uses the active theme's resolved Markdown editor styles and native code-highlight
+theme, updating on theme switch/refresh without reloading source or discarding undo.
+The upstream Aggressive concealment preset is always enabled, independently of document-editor
+preferences; concealment does not strip source markers. Normal input, no line numbers/folding,
+and disabled in-place previews keep embedding independent of resource paths, WebEngine and
+preview helpers. This is a source editor, not the HTML reading view.
+
+Editable instances show a compact formatting toolbar; read-only instances hide it, including
+when read-only is changed through the base editor or `getTextEdit()`. It offers local undo/redo,
+headings, inline formatting, lists, code, quotes, links and tables. Image import and both math
+buttons are omitted: there is no asset workflow or image/formula rendering. Existing image and
+math source remains intact. Heading choices remain reachable through the narrow-width overflow.
+The overflow button uses the main Markdown toolbar's zero-margin, zero-padding, borderless
+styling so its themed icon fits the narrow native extension; theme colors remain inherited.
+Link and table actions reuse the insertion dialogs, kept outside the host widget hierarchy so
+Todo's document-wide shortcuts cannot intercept dialog input. Insertion rechecks editability
+after the dialog closes. Formatting buttons and shortcut bindings share
+`ViewWindowToolBarHelper2::addFormattingAction()` with the main Markdown editor. Keys come
+from `ConfigMgr2::getEditorConfig()` at construction, preserving custom bindings and explicit
+unbound keys. They use the individual editor's `WidgetWithChildrenShortcut` context and are
+disabled when read-only; hidden source engines and unfocused sibling fields do not intercept
+them. No image/math shortcuts are installed. Native/host undo and redo routing is unchanged;
+the toolbar history buttons stay disabled when the host owns history and disables the local
+document's undo stack. Toolbar icons follow live themes. No configuration migration is needed:
+existing shortcut preferences are consumed without changing defaults or stored values.
+
+`UpdateDialog` uses a read-only instance for nonempty `UpdateInfo::releaseNotes` when
+an update is available. It receives the locator from `UpdateController`; `UpdateService`
+provides source-specific notes after HEAD discovery. Up-to-date results instead show the
+bundled `changes.md` through `DocsUtils`, using the active UI language with an English
+fallback (repository sources: `docs/changes.md` and `docs/changes_zh_CN.md`). The dialog
+fetches nothing and expands to fit nonempty notes. Empty or unavailable notes allocate no
+editor and use a compact layout. The release-page action stays available when notes are
+missing. On Windows, an available update also offers `Update Now`, with visible disclosure
+that it downloads the update, then closes and reopens VNote. This button is neither default
+nor auto-default; opening the dialog or pressing Return must not authorize an update.
+The view emits `updateRequested()` only; `UpdateController` owns the shared external updater
+launch. An existing attempt keeps the dialog open with visible in-progress feedback;
+otherwise the controller closes it before launch so warning notifications are accessible.
+Up-to-date results and non-Windows platforms do not offer the updater action.
+
+`test_simplemarkdowneditor` covers concealed source preservation, live theme changes with
+editing state intact, shortcut focus/read-only transitions, chords, custom bindings and opt-outs.
+
 ### MainWindow
 
 - `MainWindow2` — new main window shell with ServiceLocator DI; owns the top-level layout, toolbar, sidebar, and view area
@@ -157,6 +223,31 @@ and restores them at `folderRenameFinished`, rebasing descendants only on succes
 These signals bracket the synchronous backend call after cancellable hooks; do not
 pause for the inline-edit session or restore through the success-only rename hook.
 
+### Tags Explorer
+
+`TagExplorer2` starts with tag loading disabled. `MainWindow2::setupDocks()` connects
+its `setPanelVisible()` to the Tags dock's `visibilityChanged` before restoring window
+state; QWidget visibility alone does not distinguish an inactive tabified dock.
+Notebook selection updates context immediately but hidden list/count/selection queries
+are deferred. Hidden mutations mark the model dirty; activation consumes one coalesced
+refresh, and an unchanged hide/show reuses cached rows and matching files.
+
+Each tag badge is its directly associated note count, not a child-tag or descendant
+sum. `TagModel` loads one tag list and one batched `countFilesByTag()` result, keeps
+unknown counts on query failure, and updates count/metadata roles in place when the
+hierarchy is unchanged. Structural resets snapshot selection and the current keyboard
+row before proxy reset, restoring both without querying until the model is ready;
+notebook switches clear both.
+`TagController` derives compatible tags from the complete tag sets of already-matching
+notes, preserving AND semantics without one query per other tag.
+
+Invalidations come from `TagService::tagsChanged`, queued `EventBridge` membership and
+folder/notebook-config events, and `SyncService::workingTreeChanged` after metadata
+publication. Plain `file.saved` is not a tag invalidation. Do not query from vxcore's
+synchronous event callback: config publication can precede its SQLite update.
+No configuration/schema changes or migration are needed. Coverage:
+`tests/widgets/test_tagexplorer2.cpp` and `tests/gui/test_treechildcountdelegate.cpp`.
+
 ### ViewArea Framework
 
 The split-pane editor area, designed around vxcore workspaces:
@@ -165,7 +256,7 @@ The split-pane editor area, designed around vxcore workspaces:
 - `ViewSplit2` — QTabWidget-based split pane; each instance maps 1:1 to a vxcore workspace
 - `ViewWindow2` — abstract base for document viewer windows; receives an initial `Buffer2` and owns guarded same-type rebinding
 
-Full Text, Markdown, Typst, MindMap, PDF and Image windows also accept memory documents.
+Full Text, Markdown, Typst, TODO, MindMap, PDF and Image windows also accept memory documents.
 Use `Buffer2::displayName()`, explicit memory `editorType()`, and `canSave()` / `canReload()`;
 `resolvedPath()` is empty without a backing file. File menus, external programs, attachments
 and sidecar comments require file capabilities, not a suffix in a `vx://` identity. PDF memory
@@ -227,6 +318,16 @@ Plain text always reserves its controls; message-only MindMap status remains an 
 Regression coverage: `test_statusbar`, `test_statuswidget`, `test_markdownviewwindow_lazy`,
 and `test_typstviewwindow_insertion`.
 
+Editor status chips (`StatusBarCol` 1/3/4/5) use each non-Native theme's
+`widgets.statusbarcolumn` roles, backed by its existing base palette rather than a shared
+rainbow palette. Cursor, spelling and syntax use the content surface; mode uses the selected
+surface. The selected foreground keeps text readable across those fills, including Moonlight.
+Spelling keeps themed hover/pressed fills and the normal button keyboard-focus edge. Encoding
+and Vi widget mounts retain their own inherited theme rules; Native retains system styling.
+Keep these styles in the theme resources so already-open editors follow theme switches.
+Bundled style-only changes need no app/session configuration migration and follow the normal
+versioned theme-resource refresh described under Inline Notification Banners below.
+
 `LinkPreviewOverlay` uses the same native-child-only ancestry policy, but keeps normal hit
 testing. Its QWidget parent remains the source view; its native parent may be the containing
 main or detached window. Rebinding a preview must not promote the source/tab stack or steal
@@ -238,12 +339,23 @@ preview promotion/rollback with native geometry, hit testing and keyboard owners
 `LinkPreviewOverlay` requests the existing cancellable workspace close on a primary click in
 its originating view's exposed content or toolbar. Save/Discard/Cancel remains authoritative;
 Cancel preserves the remaining preview tabs and their keyboard focus; accepted dismissal
-returns focus to the source. Consume the dismissal press/release and double-click continuation
-so source links and toolbar actions do not fire.
+returns focus to the source content area. Consume the dismissal press/release and double-click
+continuation so source links and toolbar actions do not fire.
 Clicks inside the preview, other views, popups and modal dialogs retain their normal routing.
 Dragging, focus loss and source hide/show do not dismiss drafts. The application mouse filter
 is installed only while the overlay is visible; a short source-owned guard handles a trailing
 double-click after the closed overlay retires, without delaying closure or owning tabs.
+
+Content focus restoration belongs to `ViewArea2`'s common preview-host retirement, covering
+Close Preview, the last preview tab, and outside dismissal. Clear focus from an accepted
+closing preview tab before removal and from the retiring overlay before hide, so Qt cannot
+walk the top-level focus chain into dock/toolbar controls. Queue restoration after overlay
+destruction so native children cannot reclaim focus. Revalidate the source identity/generation, current
+owner tab, active top-level window and absence of a newer preview or popup before using the
+source's content focus proxy. Background closure, replacement and promotion must not steal
+focus from another pane, a new preview or the promoted editor. Reacquire focus after synchronous
+FocusOut redirects. A reentrant completed close is success, not cancellation; a surviving
+accepted view uses its current owner, while a replacement retains its writer and needs new consent.
 
 Native-rendered Markdown links handled by the application intercept trusted clicks before
 browser navigation and bind activation to the current document generation. Browser-owned
@@ -252,19 +364,51 @@ entering the existing link policy; same-document anchors scroll in place. Chromi
 `loadStarted` even for rejected link navigation, so allowing that navigation would retire the
 still-visible source bridge and break subsequent links. Genuine reload invalidation is unchanged.
 
+#### Outline section reordering
+
+Editable Markdown, ordinary mind maps and safely mapped Typst sources share the Outline
+panel/popup move contract. Above/Below changes sibling order; OnItem reparents a whole
+section/subtree. Confirmation is mandatory, filtering disables dragging, and publication,
+permission or provider changes cancel pending moves. The model never moves rows optimistically.
+
+`OutlineMove` carries source, insertion anchor, target level and explicit parent indices in one
+published snapshot. `Outline::planMove()` supplies both drag feedback and confirmed placement.
+Markdown retains its six-level limit; native maps and Typst accept deeper trees. A map's main
+root accepts children but cannot move; viewport drops detach to the orphan-root list. The map
+adapter resolves current native IDs and calls guarded `MindMapEditor::reorderOutlineNode()` once.
+Pending topic/note drafts are rejected, not committed as a second undo operation. Read-only,
+protected-locking and generated preview policies remain authoritative.
+
+Typst consumes `VTypstEditor::getSourceHeadings()`, never a regex scan or evaluated outline alone.
+The complete AST-backed source list includes hidden headings. Ambiguous source mappings
+(generated, nested, imported, repeated or level-transformed headings) remain navigation-only.
+Moves that disagree with hidden section boundaries/parents are rejected. Both text formats use
+`OutlineSectionEditor` for one undoable source edit and mapped cursor/selection restoration.
+Retire native Typst callbacks in the host destructor before member destruction: the child editor
+emits resource invalidation when QWidget later deletes it.
+
+Coverage: `test_pdfvieweradapter_outline`, `test_markdown_heading_link`,
+`test_mindmapviewwindow_print`, `test_typstviewwindow_insertion` and native `test_typsteditor`.
+
 #### Outline mind-map snapshots
 
 Markdown, PDF and Typst expose **Mind Map** (Lucide Brain, `brain_editor.svg`) immediately
 before **Outline**. The clicked
-window's published `OutlineProvider` supplies a read-only native map, without saving,
-reparsing or changing source mode. Each activation captures fresh memory content; open maps
-never follow later edits. When the first real outline heading is the only H1, its literal
+window's published `OutlineProvider` supplies a native map, without saving,
+reparsing or changing source mode. Each activation captures a fresh source-bound projection.
+When the first real outline heading is the only H1, its literal
 name becomes the central topic without a duplicate heading node; its children become root
 branches. Otherwise the document name remains central. This uses outline order, not the
 position of preceding prose. A title-only outline produces a single central node. Other
 heading IDs and the document-based preview tab name remain unchanged. Synthetic placeholders
 are omitted; real empty/numbered/Unicode names remain literal. Missing/invalid outlines never
 open blank maps.
+
+The snapshot also captures `Outline::m_hasSectionNumber`. When true, the native editor must
+not add automatic section numbers to its already-numbered topics, even after editor settings
+change. Later source metadata cannot change that captured policy. Unnumbered snapshots and
+ordinary maps continue to follow the mind-map numbering preference. Rendered-label coverage:
+`test_viewarea_tab_reuse::outlineMindMapPreview`.
 
 Opening captures the clicked provider's current heading index with the outline, before open
 hooks can change selection. A valid real index selects its `h<original-index>` node, or `root`
@@ -280,29 +424,121 @@ Generation, visibility, enabled/content and protected-locking guards cancel stal
 Initial focus does not emit `nodeClicked`, close the preview, change source position or mutate
 snapshot JSON. Later source selection changes do not retarget the open snapshot.
 
+The generated buffer remains memory-backed with no separate save/reload destination. Capture
+source mode, current parser eligibility, document revision and text generation before open hooks.
+Only a writable Edit source with a current validated Markdown/Typst source mapping is editable;
+Read/read-only sources, PDF and unsupported/unready mappings are navigation-only. Captured
+read-only never upgrades later; current source restrictions can revoke edit authorization.
+Invalid or overlapping parser ranges must fail closed, not be repaired by guessed source mapping.
+
+Generated maps install m3's source-outline handler in addition to basic mode. Allow literal topic
+changes, one child/sibling addition and moves; reject deletion, duplicate/subtree paste, orphan
+creation/detach, all cross-links and rich metadata. A filename-only root has no editable heading;
+a promoted title can be renamed and receive children but cannot move. Add creates an empty source
+heading before inline editing; Escape retains it. Native sibling intent includes its clicked
+anchor so Enter/Shift+Enter preserve source level even across omitted placeholder levels.
+Copy, folding, selection, navigation and camera remain available. Config/theme refresh must
+preserve the handler, input, caret and local draft undo; handler rebinding resets native history.
+Ordinary mind-map files retain their existing features and save policy.
+
+The Outline Dock and mind-map source moves share `Outline::planMove()` and
+`OutlineSectionEditor::reorderHeadingBlock()`. Markdown and Typst expose one guarded
+`applyOutlineSourceEdit()` adapter: ordinary Outline moves use focus=true, preview commands use
+false. A live active writer must exist, capture successfully and match the clicked editor;
+validate the buffer revision/content before registering that source's writer without focusing it.
+Moves use the same Yes/No, default-No confirmation, in a separate native approval phase before
+candidate construction. Apply/history callbacks never show dialogs or pump events. Native
+candidate/scene/history and host receipt allocations precede source mutation; paired Undo/Redo
+replays exactly one current QTextDocument group, never an inverse edit or whole-document reload.
+
+Install the source receipt and controller in-flight state before writing. Native publication
+finishes the atomic interval; another content operation waits for authoritative source settlement.
+Tracked heading cursors and levels validate the published roster, including hidden Typst boundaries.
+Markdown waits for `sourceEditState()==Settled` after the post-publication generation barrier;
+only joined normalization while its receipt is pending is authorized. Typst waits for the current
+post-write compilation epoch/generation's headings publication, not Ready alone or synchronous empty
+invalidation. A completed unsupported/empty projection or compiler error freezes edits but may leave
+exact paired Undo available. Receipt content generation prevents deferred close reconciliation from
+adopting a later independent body edit. Source-originated changes stale other previews; reopening
+is recovery. Reconcile only topics/current native history, never colors, folds, camera or `loadJson()`.
+
+An explicit inline topic acceptance during that settlement retains its input and completes once
+publication finishes, rather than rejecting a freshly added heading's title. The controller's
+pending signal gates native acceptance until the new binding is published or definitively stale;
+the queued acceptance still runs the ordinary source guards. Direct source commands and changed
+draft captures remain rejected while pending. Escape, retirement and handler replacement cancel
+the deferred intent. Before close consent, cancel that intent and hold all draft acceptance through
+the modal decision (including focus-triggered captures); Cancel retains the draft and Discard leaves
+only the already-created empty heading. Coverage: `outlineMindMapNewHeading`.
+
+Accepted operations already changed the source before native `documentChanged`. Existing
+`pendingEditChanged` dirty marking and BufferService's 3000 ms capture accept unfinished inline
+text with `commitActiveEdit(true)`, retaining its widget/caret. Reuse source Auto Save / Backup File /
+None policy: no second timer, sidecar or fake save callback. Source disk/backup persistence may need
+the next tick after a draft capture; dirty-set iteration order is not a durability guarantee.
+The map JSON is only a derived cache. Its revision may advance during modal approval; never reload
+that cache into the native projection or clear the source's dirty/failure state because it synced.
+
+Generated-view `isModified()` reports only an unapplied native draft. The source tab owns actual
+unsaved/saving/failure state. Close attempts draft capture first; accepted changes need no scratch
+consent. Rejection retains the draft and offers Discard/Cancel. Cancel also vetoes source retirement;
+Discard calls `discardActiveEdit()` and cancels only unapplied input. Forced close still attempts
+capture and fails without prompting on rejection. Retire callbacks/history and detach the generated
+writer/resource policy before deferred destruction; a retired widget must not become a scratch map.
+Live hidden sibling sources may be captured during close checking, but new admission into a closing
+host stays forbidden. Promotion and session persistence remain forbidden.
+
+At `ViewArea2` destruction, disconnect registered windows and their outline providers from the
+area before its registry members die. `QWidget` deletes child editors later, while a `QPointer`
+to the area is still live; protected-editor teardown publishes outline changes. Those callbacks
+must not query the destroyed registry. Retire only the area receiver, preserving protected cleanup.
+`restoreUnlockedProtectedEditors` covers direct area teardown and restored content/identity.
+Register every view through `registerViewWindow()`: direct hidden-owner deletion removes only the
+entry still pointing to that QObject. Destruction of an old conversion view must not erase the new
+view at the same ID. The area destructor disconnects this cleanup too before the registry dies.
+
+Coverage: `outlineMindMapSourceEditing`, `outlineMindMapSourceGuards`,
+`outlineMindMapSourceHistory`, `outlineMindMapSourceSavePolicy`, `outlineMindMapSourceClose`,
+protected/nested lifetime cases, and direct Markdown/Typst adapter tests in the existing widget suites.
+
 Real document-root children receive automatic colors from m3's public branch palette before
-loading the read-only snapshot. Colors are distinct until the palette is exhausted; descendants
+loading the snapshot. Colors are distinct until the palette is exhausted; descendants
 inherit their branch's color and the document root stays neutral. The snapshot retains these
 colors through navigation and theme switches. Ordinary map files and their preferences are unchanged.
 
-A completed plain primary click on a node body/topic navigates to its original source heading.
+A completed plain primary click on a node body/topic navigates to its mapped current source heading.
 The promoted title maps to its original H1; a document-name-only root has no destination.
 Ctrl/Shift selection, keyboard/API selection, folding, dragging and other controls do not navigate.
-The controller closes the source's preview through existing save/cancel consent before revealing
-that exact source window. If the source is itself a tab in the preview, only the generated map
-closes and unrelated tabs survive. Whole-preview closure remains sequential/nontransactional;
-a later veto prevents the jump but does not restore already-closed tabs.
+Navigation calls `ViewWindow2::activateOutlineHeading(index)`, which moves to the heading without
+activating the source window or changing keyboard focus. The preview remains the current tab and
+keeps its canvas focus and Tools panel, including when its source is a hidden sibling preview tab.
+Repeated navigation needs no tab reselection, and unrelated tabs keep their unsaved content without
+save/discard consent. Explicit preview dismissal and source close, replacement, conversion and
+protected-note locking retain their existing cleanup.
 
-Navigation retains each provider's normal Outline behavior: Markdown uses its current mode,
-PDF follows its bookmark destination, and Typst reveals the source heading (Read enters Edit).
-The roster stores original navigable-index bits, promoted-title index and an ordered heading
-fingerprint, never another plaintext outline. `Outline::navigationFingerprint()` covers names,
-levels and placeholders, not display/reordering permissions. Validate it before consent and
-again after source focus; changed headings require reopening the snapshot. Body-only edits use
-the current heading positions. Recheck source ID/generation/protection across callbacks, and
-retain no source outline or protected operation lease across consent. Ordinary file mind maps
-do not navigate other source windows. Coverage includes real bookmarked PDF/Typst destinations,
-protected/nested sources and cancellation/stale-source races in `test_viewarea_tab_reuse`.
+Markdown uses its current mode; PDF follows the bookmark destination without pdf.js's delayed
+text-layer focus; Typst reveals the source heading (Read enters Edit) without focusing it. Imported
+Typst headings open or reposition a background source tab without replacing the original source.
+Ordinary Outline clicks keep their existing focus behavior. The base activation API dispatches
+non-focusing provider handlers; PDF and Typst override it for their focus-aware navigation paths.
+
+Markdown reader scroll requests supersede earlier deferred line restoration. `NodeLineMapper`
+owns one pending scroll timer shared by its Y-position and source-node paths; an explicit heading
+anchor cancels it rather than letting the old 300 ms callback scroll away again. Keep the existing
+defer duration and smooth-scroll/folding behavior. Coverage:
+`test_viewarea_tab_reuse::markdownReaderNavigationSupersedesRestoration` exercises both paths
+and checks heading visibility after the old callback deadline, not just immediately after navigation.
+
+The roster stores stable node-to-current-heading mappings, ordered real IDs, immutable original
+promotion identity, source revision/text generation and a navigation fingerprint, never source text
+or another Outline. Original `hN` IDs are only admission identities; never decode them after edits.
+New native UUID nodes navigate normally after verified publication. The fingerprint covers names,
+levels and placeholders, not permissions; body-only external edits can retain navigation but not
+mutation authorization. Recheck source/preview identity, generations, host and protection across
+callbacks. Hold no source outline or protected lease in history. Ordinary file maps do not navigate
+other source windows.
+Coverage includes real PDF/Typst destinations, protected/nested sources, repeated clicks, keyboard
+focus retention, imported Typst tabs, dirty siblings and stale outlines in `test_viewarea_tab_reuse`.
 
 `ViewAreaController` admits generated `vx://outline-mind-map/` buffers only with their exact
 source window/generation. Its metadata-only provenance roster survives until native view
@@ -336,7 +572,8 @@ Settings and other virtual content are never replacement candidates; lone-Home r
 remains owned by the existing successful-open path.
 
 `ViewWindowFactory` stamps the normalized creator key. Reuse requires that exact key and
-`supportsBufferReplacement()`; Text and Others are distinct even though their class matches.
+`supportsBufferReplacement()`. `Others` has no built-in viewer and does not participate
+in tab replacement; explicit opens use the system application instead.
 The controller owns add-before-remove workspace membership, exact-ID reentrancy guards,
 rollback, closed-tab history and consistent current-buffer publication. Unowned candidates
 must be closed through BufferService after checking all visible, hidden and detached owners.
@@ -372,6 +609,293 @@ after installing the validated incoming project and source; its native compiler 
 Coverage: `test_viewarea_tab_reuse` uses production services, windows, real explorer gestures,
 dialogs and separate test-mode session contexts; `test_configmgr2` covers preference persistence
 and `test_pdfvieweradapter_viewer` covers new-document versus same-document replay.
+
+#### Markdown-backed TODO planner
+
+`TodoViewWindow` handles newable/searchable `TODO` files (`.todo`) and memory buffers with
+`editorType="todo"`. Ordinary opens default to Edit; forced Read and an existing tab's mode
+remain authoritative. Tasks is the sole visible surface; there is no raw Source mode or
+Tasks/Source switch. Printing and encrypted-note support are not advertised or extended.
+
+One hidden, enabled, non-focusable `SimpleMarkdownEditor` owns the LF-normalized
+`QTextDocument` and its undo history. It is an internal document engine, never a visible fallback.
+`TodoEditor` renders `TodoListModel` / `TodoTaskModel`; `TodoViewWindowController` validates
+and applies source commands without widgets or storage writes. Projected task notes use a
+separate `SimpleMarkdownEditor` input with local undo disabled and source-history routing.
+Typing coalesces by field until focus, selection, mode or another command ends the group.
+The details panel has a right-aligned close icon, then completion/title/star, inline steps,
+Add a step, Add to My Day, due date and Markdown note, in that order. The note placeholder is
+"Add note (markdown supported)". Task and step completion share the central list's circular
+outline/checkmark drawing, but retain independent, reversible checkbox interaction and
+accessibility. The circle stays unfilled when checked; the tick uses the same theme-resolved
+foreground as its outline (including selected/disabled states), never the palette's highlight
+fill/text pair. The theme accent supplies a visible keyboard focus ring. My Day is a checkable
+button with a themed Lucide `sun.svg` and left-aligned text: "Add to My Day" when off and
+"Added to My Day" when on; clicking it again removes membership. Quick-add due controls remain
+ordinary checkboxes.
+Details use 12px outer margins and section gaps, padded title/step inputs and icon actions,
+and full-width My Day/due-date rows with 12px padding. Quick-add uses a matching padded input
+and Add button; control heights are minimums, not fixed text-clipping heights. The Markdown
+note stays between 144px and 240px high, with remaining space before the bottom footer; long
+notes scroll inside the editor and long detail content scrolls in the existing outer pane.
+The dynamic step layout enforces its minimum content size. Opening a wide details pane restores
+its 320px allocation only if the hidden splitter pane retained zero width; nonzero user sizes stay.
+Step rows have a 16px leading inset (mirrored in RTL);
+the empty list hides that inset too, while Add a step stays at the panel margin.
+Completed step titles use strikethrough, including on initial load and in Read mode. Completion
+changes and undo/redo keep it in sync; only strikeout is overridden so theme/zoom fonts still inherit.
+Step rows retain their input widgets through typing echoes;
+structural changes retire old row callbacks. Each three-dot step menu offers completion toggle,
+Delete, and Promote to Task only for incomplete steps. Promotion appends a fresh task to the same
+list, transfers only the nonblank step title, and removes the step in one source/undo transaction;
+parent selection, unrelated source and existing metadata survive. Blank titles reject unchanged.
+Due-date menus use projection today for Today, Tomorrow (+1 day) and Next Week (+7 days), plus
+Pick A Date and, when set, Remove Due Date. The calendar commits only on OK; menu actions and
+picker acceptance reject stale source, selection, binding and read-only state. Task tags have no
+native editing/filter controls or row badges; existing tag metadata remains lossless. The due
+button uses the themed calendar icon and keeps icon/text together at the physical left edge,
+including in RTL. The footer displays the immutable creation timestamp as a locale-formatted
+local date; legacy tasks show "Creation date unknown" without backfilling metadata. Its trash
+icon reuses task deletion's default-No confirmation and stale-gesture guards. The date wraps
+rather than pushing the icon offscreen; no separator is drawn above the footer.
+Task context menus group My Day, importance and completion toggles; Due today, Due tomorrow
+and Pick a date; Move task to...; then Delete task. Toggle labels reflect the current task,
+with My Day membership determined by the projection's today. An offered My Day add/remove
+keeps that intent across a date rollover; adding uses the current day. Date actions share the existing
+picker and source-history commands. Lucide icons follow the theme; the trash icon uses the
+error foreground rather than a literal color.
+The move submenu lists every other real list, including empty lists in collapsed groups, using
+escaped qualified names and stable destination keys. It is disabled without a destination or
+in Read mode. There is no move dialog or move footer button; drag and Alt+Up/Down still reorder
+in eligible list views, but Move Up/Down are no longer context-menu entries.
+Ctrl+T toggles My Day, Ctrl+D toggles completion, and Delete uses the existing confirmation.
+These keys are scoped to the task list and its context menu (including the move submenu), not
+text inputs, the sidebar or modal dialogs. The task list consumes unavailable commands on empty
+selection, the Completed header and Read mode. Popup actions retain real widget-scoped shortcuts;
+a local popup handler dispatches them without registering editor/window-wide shortcuts or
+allowing a competing parent binding to run. Menus close before shortcut-triggered dialogs.
+Captured source/binding/selection/group/writability guards apply to every menu action. Formatting-
+only revisions remain admissible; no extra document-revision guard replaces the source token.
+The central list/smart-view heading uses 1.35 times the editor's current font size, with
+24px leading/options icons and extra vertical spacing. Theme refresh and zoom derive that size
+from the editor font rather than repeatedly enlarging the heading. Inline list renaming remains
+unchanged, and task rows keep their existing typography.
+Nonempty list descriptions appear as wrapped plain-text labels, capped at 104px so long text
+cannot displace the tasks. Empty descriptions and non-list/filtered views hide the label.
+**Edit Description** opens a `PlainTextEdit` dialog with local undo and OK/Cancel; only acceptance
+applies one source-history command to the captured list. The dialog stays outside the TODO
+widget ancestry so source shortcuts cannot intercept its input, and rejects stale source,
+selection, read-only or destroyed-owner results. Existing description blocks are unchanged;
+no document or configuration migration is needed.
+
+`core/tododocument` uses public cmark AST/source APIs, never vtextedit private headers. Each
+document-child H1 is a group and each H2 is a list; direct unordered checkbox items under an
+H2 are tasks. ATX and Setext headings are accepted at both levels. One blockquote owns a list
+description or task Markdown note; direct nested checkbox items are steps. Checklists,
+headings and fences inside notes are not planner structure. Ordinary comments stay opaque;
+unsupported root/body blocks and malformed owned metadata produce line-numbered diagnostics,
+disable Tasks mutation and keep Tasks visible. Invalid source remains saveable unchanged;
+repair it at its source and reload rather than silently rewriting or exposing a raw editor.
+
+Ctrl+F and Find route to native current-file task search. Raw Replace/ReplaceAll is rejected
+without source changes, and the raw Find-and-Replace toolbar action is not advertised.
+File-open navigation uses an absolute UTF-16 cursor offset first, otherwise a zero-based search
+match line, otherwise a zero-based explicit line. Lines are converted through the LF document's
+block positions. A task range includes its steps, note and comments; other owned positions
+select the containing list. Navigation switches to that real list, clears search/tag filters,
+expands its group and Completed when needed, and selects/focuses the native row, including in Read.
+Custom-group heading/comment hits select the organizational group control without changing the
+task view, filters or collapse state, and clear task selection rather than invent a task hit.
+Internal Default heading/comment hits focus its first root list, or the current view row when
+empty, without exposing a group header. Organizational focus survives projection refreshes.
+Invalid/unavailable source or positions with no owner leave the native selection unchanged.
+
+Whole-line adjacent `todo`, `todo-group`, `todo-list` and `todo-item` comments contain per-owner
+JSON. This unreleased format remains version 1, with no legacy H1-list grammar or conversion.
+The version header is optional on input; structured changes add it. Group/list/task IDs share
+one unique namespace. Owners without IDs get UUIDs on their first mutation, not on open/filter/save.
+Runtime `id:` / `source:` / implicit `default:` keys are never serialized. Metadata writes preserve
+unknown keys and escape `<`, `>` and `-` only
+inside JSON string tokens; numeric signs/exponents remain JSON numbers. Source edits retain
+untouched blocks, validate expected UTF-16 ranges and the live document revision, and reparse
+the tentative result before one undo transaction. Formatting-only revisions do not replace
+published task rows; source changes and foreign loads invalidate pending owner gestures.
+
+`default:true` in group metadata identifies Default independently of its translated/edited title.
+Default is an internal global owner, never a visible group. Its lists appear as unindented,
+always-expanded root rows immediately after smart views, before all custom groups, regardless
+of Default's physical source position or latent collapse state. An empty Default adds no row.
+It has no group menu or drag handle; custom groups literally titled "Default" remain ordinary
+groups. Task/list labels and accessibility omit the internal owner name, and that name does not
+contribute to group-title search or counts. Group choices use **No group** with the existing
+empty destination key. Projection does not rewrite or materialize source; no migration is needed.
+Leading H2 lists without H1 belong to one implicit Default, excluding the file preamble. When a
+command materializes that parent, insert its H1/metadata at the first leading H2, never EOF.
+An absent Default is created at EOF when New List has no chosen group; empty-file quick-add
+creates Default / Tasks / task atomically. Multiple default owners, including implicit plus
+explicit, diagnose instead of merging. Header insertion precedes the group; parent identity
+precedes a renamed list title, but list metadata follows that title even at unterminated EOF.
+
+Groups own contiguous spans of the flat list snapshot; list `m_groupIndex` is snapshot-local.
+Group ranges end at the next H1; list ranges end at the next H1/H2. Group/list moves preserve
+owned blocks and remap synthetic child selections. Parent-group edits stay outside moved list
+payloads. Keyboard List Up/Down stays inside its group; grouping commands change ownership.
+Custom-group keyboard and drag reordering skip Default when choosing neighbors or detecting
+boundary/adjacent no-ops, matching the visible custom-group order.
+Group menus contain Rename, New List and Ungroup Lists. Ungroup Lists dissolves a custom group
+into Default without deleting its lists/tasks; Default itself cannot be ungrouped. Group comments
+move to Default's pre-list region, not into another list. Without Default, the dissolved group's
+heading becomes a fresh Default in place. The command is one source transaction/undo step.
+List menus contain Rename, Edit Description, Sort by, either Remove from Group (custom-group
+lists) or Move List To Group (Default lists, submenu of all custom groups), Duplicate and Delete.
+The move submenu is disabled when no custom group exists. The icon-only **List Options** button
+uses the themed three-dot `menu.svg`, retains a List Options tooltip/accessibility label, and
+opens the same menu. In smart or filtered views it offers only Sort by; sorting remains available
+in Read mode while list mutations stay disabled.
+
+**Sort by** replaces the toolbar combo and offers Importance, Due Date, Added to My Day, Name,
+and Creation Date. Reselecting the checked choice restores manual order and permits dragging in
+an unfiltered editable list. Importance puts marked tasks first; Due Date is earliest-first;
+Added to My Day and Creation Date are newest-first; Name compares raw titles case-insensitively.
+Missing dates sort last and ties retain source order, separately within active/completed tasks.
+Sorting is transient for the document's projection, never a source edit. A sidebar list-menu
+choice targets that list and clears filters; the three-dot menu preserves smart/filtered views.
+
+Tasks may carry immutable `todo-item.createdAt` metadata: an ISO timestamp with `T`, seconds,
+optional 1–3 fractional digits, and an explicit `Z` or numeric offset. New tasks write UTC with
+milliseconds. Legacy tasks without it remain unknown; opening, sorting, editing or moving them
+does not backfill a guessed creation date. Existing timestamp strings survive unrelated edits.
+This optional version-1 field requires no document/config migration.
+Duplicate inserts a copy beside its source, retaining descriptions, notes, steps, completion,
+due/My Day/tag fields, comments and unknown metadata, but assigning fresh list/task IDs and one
+new creation timestamp to all copied tasks. It expands/selects the copy and is one undo step.
+Nonempty list deletion still asks confirmation; there is no destructive group-delete action.
+
+The unassigned **Add list icon** state uses Lucide's `face_slightly_smiling_plus.svg`,
+recolored through `IconUtils` for normal and disabled states. Assigned emoji replace this glyph.
+The title-leading **Add list icon** / **Change list icon** button embeds m3's public
+`EmojiLineEdit` (`<m3/qt/emoji_line_edit.h>`), sharing the mind-map emoji catalog, categories,
+search and keyboard navigation. Only a confirmed catalog choice changes the list; search text
+and cancellation never do. **Remove icon** clears the assignment. The optional version-1
+`todo-list` metadata `icon` is a string; empty/absent is unassigned, and clearing removes the key.
+`setListIcon()` preserves unknown metadata and assigns missing owner IDs in one source/undo
+transaction; no-op changes do not materialize IDs. `IconRole` exposes the glyph only for real
+lists. Assigned glyphs replace the generic sidebar list icon and lead the content title, remaining
+visible in Read mode with the title button disabled. Picker results must pass the existing
+source/generation/writability gesture check and still target the selected real list. Duplicate,
+move, save and reload retain the metadata. This optional document field needs no config or
+existing-document migration; unassigned lists keep their previous sidebar rendering.
+
+The sidebar accepts same-model Move drags for real groups/lists, never smart views, in both
+wide and overlay modes. Lists drop on a custom group to append, on/before a list to insert in
+that list's owner, or on empty viewport space to become root lists (creating Default if needed).
+The gap before the first custom group also returns a list to the root; a gap before a later
+custom group appends to the preceding visible custom group, never a hidden source neighbor.
+Groups reorder only at gaps before custom headers or at the end; they never nest among root
+lists or children. A gap before a hidden custom child still refers to that actual child. Successful moves reveal the destination group. Sidebar dragging is independent
+of task search/sort/smart-view projection. Model UUID, snapshot epoch, revision and writable-source
+admission reject foreign/stale/read-only drags; unchanged source after formatting retains published
+intents. No-op drops add no identities or undo history. Controllers own all source mutations.
+`TodoListView` uses model-admitted DragDrop and `QAbstractItemView::dropEvent`, bypassing
+`QListView`'s adjacent/end-row move shortcut: the last row dropped on the viewport may still change
+its group. Its drag lifecycle never asks Qt to remove source rows after the controller's move.
+
+Organizational group selection and collapsed keys live only in `TodoProjection`, not config.
+The model retains all list and custom-group rows; the sidebar hides only collapsed custom
+children. The same sidebar at every width places search above icon-leading smart views,
+a separator, root lists, then custom groups and their indented lists; nonzero incomplete counts
+occupy trailing badges on list and smart-view rows. Custom groups use the notebook explorer's
+`TreeChildCountDelegate` renderer for their child-list count beside the chevron, with title
+clearance mirrored in RTL. Zero counts are hidden; expansion and task filters do not change
+the cached list count. `groupAt()` still resolves a root list's internal Default owner, while
+its presentation `GroupIdRole` / `GroupTitleRole` are empty and `rowForGroup(Default)` is absent.
+New List and the accessible icon-only New Group control stay below the scrolling list. New Group
+uses `new_group.svg`: the group-row outline with an upper-right plus, recolored by `IconUtils`
+for normal and disabled states. Group rows select on single click (including the chevron);
+only a group-row double click toggles mouse expansion. Child-list double clicks never toggle
+their parent. Keyboard Enter/Space and Left/Right expansion remain available, including in Read
+mode; expansion and reordering are no longer separate context-menu actions.
+Group actions use the row context menu at every width, including for empty groups. Collapse and
+group selection do not change task projection/history or invalidate task drags; group-title
+search ignores collapse state. New Group/New List use post-commit output keys, never a guessed
+last list. Sidebar presentation is transient; the new commands reuse the existing source schema.
+No document or config migration is needed.
+
+My Day is explicit `myDay == today`, independent of due dates. Important and Planned are
+current-file projections; search and exact-tag filters compose across this file and ignore
+owned comment JSON. Normal notebook content search still reads raw `.todo` source, including
+metadata. Sort/filter/Completed expansion never reorder or dirty source. The visible window
+refreshes today's date on activation and each minute, without reminders or persisted UI state.
+Quick-add due controls appear and apply only in unfiltered Planned; a remembered choice never
+leaks into another view or filtered result. The My Day toggle button tooltip and accessible
+description retain the stored date even when it is not today, before a user replaces it. Step
+rows fit the 320px details pane without outer horizontal scrolling. These presentation changes
+reuse existing document fields and require no document or configuration migration.
+Below 840 logical pixels, a top-leading icon-only Lists toggle uses Lucide's `list_tree.svg`
+and opens the existing sidebar over the task area without resizing it. Its tooltip and accessible
+name remain "Show lists and search"; the icon follows theme changes and the checked/open state.
+Search, smart views, groups, lists and creation controls stay together;
+there are no separate compact-navigation combos. List selection, Escape, another Lists click,
+or a click/focus outside the panel dismisses it; owned menus/dialogs remain interactive.
+Ctrl+F first leaves narrow details, then opens and focuses sidebar search; Enter exposes the
+filtered tasks. Escape leaves active search IME composition to the input. Hiding/rebinding the
+editor clears the overlay, and widening docks the same sidebar again. The overlay follows the
+splitter's leading edge in RTL. Sidebar and list backgrounds use normal widget/theme styling,
+without a sidebar-specific palette or background stylesheet. Auto-fill keeps the Native overlay
+opaque without selecting a custom color.
+Task details use a stacked page at narrow widths; the same close icon returns to tasks.
+Task rows omit the redundant group/list location in a specific unfiltered list, including sorted
+and Read views. Smart, search and tag-filter views retain it because they can span lists. Due/My Day
+dates, steps and note indicators remain in the secondary line; without any remaining details the
+title is vertically centered. The task pane uses 16px side/top insets and 12px section gaps.
+Rows have a 56px minimum height (growing for two font-height lines), 16px icon insets and a
+14px icon-to-text gap; the title/metadata block is vertically centered with a 4px line gap.
+Painting and hit testing share completion/star rectangles. Rounded selection/hover fills have
+4px vertical separation; the Completed header keeps its separate mirrored geometry and a
+44px minimum height. Rows fit the viewport and elide text rather than forcing horizontal scrolling.
+The Completed section shows its count in a trailing `TreeChildCountDelegate` badge instead of
+parenthesized title text. Its chevron, title and badge mirror in RTL; accessible text and tooltips
+retain the count. Single click, Enter and Space toggle only the completed row range, leaving Qt's
+current/selected separator and task-view focus intact. The controller does not rebuild the sidebar
+or restore a remembered task on this toggle. Explicit Back/source navigation can still reveal and
+select its requested task. The separator alone uses `Qt::PointingHandCursor`; task rows, empty space
+and leaving the viewport restore the inherited cursor, including after scrolling or filtering.
+`TodoTaskModel` retains sorted completed descriptors while collapsed, but index/item/key/drop lookup
+exposes only visible rows. Insert/remove notifications keep active/separator persistent indexes;
+removed completed indexes stay invalid. A separate drag generation rejects MIME captured before a
+toggle without invalidating the surviving indexes. No document or configuration migration is needed.
+Custom task painting retains the theme's active list selection foreground/background pair when
+focus leaves the window, like Lists; Native's inactive alternate-base can backfill to black.
+Secondary text uses the existing muted palette token, not the OS `HighlightedText` color.
+Like the sidebar, task hover uses a translucent foreground tint and keyboard focus has an inset
+outline. The Completed header retains native style painting. No fixed background color is added.
+The sidebar paints its own rounded selection with the theme's active list-item foreground and
+background pair, retaining it when focus moves to tasks. Hover uses a translucent foreground
+tint; do not use Native's inactive/hover alternate-base tokens here, since an alpha-zero system
+color can resolve to opaque black through palette backfill. Cached colors/icons refresh on
+theme changes; title elision reserves room for badges/chevrons and mirrors geometry in RTL.
+
+Only the base writer/save/reload/close lifecycle persists content. Foreign buffer revisions
+reject the captured gesture before reloading; autosave notifications alone do not establish
+that an inactive view loaded the new source. The window registers a binding-scoped opaque writer
+token and uses BufferService's actual publication/queue-owner facts, never text-equality or
+observational snapshot history, to recognize its own writes. Own pending saves retain newer local
+edits/undo; a foreign pending writer blocks capture/mutation until a generation-guarded completion
+wake can load the final source. An already-active stale Save rejects and schedules that refresh,
+without needing a new focus-gain event. See the
+[service publication contract](../core/services/AGENTS.md#snapshot-provenance-and-ordinary-manual-saves).
+
+A matching core revision alone is insufficient for memory buffers: also retain the last
+accepted publication token. Own zero-delta writes update that token without clearing newer
+edits; a foreign token change (including token zero) requires a real source load and history
+reset, even when the bytes did not change.
+
+Snapshots return original decoded text only when
+the current normalized text still equals it; otherwise serialize to the detected file ending,
+independently of the modified flag. Uniform LF/CRLF and EOF survive edits; mixed endings follow
+the text editor's normalization convention. Actual loads/rebinding clear undo, not mode switches.
+
+Coverage: `test_tododocument`, `test_todoviewwindowcontroller` and native `test_todoviewwindow`.
 
 #### Native Typst editor
 
@@ -488,6 +1012,24 @@ insertion and resource menus/actions: never delete the borrowed source editor in
 Keep menus parented to the native editor for logical focus, and defer retired-composite deletion
 until owned menus/modals and callbacks have unwound. Native GUI coverage lives in
 `test_typstviewwindow_insertion` (`resource*`) and `test_typsteditor`.
+
+#### Detached-window presentation
+
+`ViewArea2::hostWorkspaceInDetachedWindow()` creates a hidden host. Show it only after
+`moveViewWindowToDetached()` has attached and selected the existing view, or after
+`openBuffer()` has admitted its first live view. Showing the empty host can paint a
+blank native frame before the themed content. Keep failed creation hidden, preserve
+background selection, and leave focused activation on the existing paths. The first-show
+content contract is covered by `test_viewarea_tab_reuse::detachedWindowFirstShow`.
+
+The detached corner places **Attach to Main Window** (Lucide `picture-in-picture`)
+to the right of **Stay on Top**, using the same active/inactive icon palette. Its
+`ViewSplit2::attachToMainWindowRequested` signal routes through `ViewArea2`'s existing
+reattachment operation: append every live view in tab order to the selected ordinary
+main split, preserving unsaved edits and undo, then retire the detached host. Clear
+the active preview command target before resolving the main split; a preview overlay
+must never receive these tabs. Hide the retiring pinned host before revealing and
+activating the main window, clearing only its minimized state.
 
 #### Detached-window close
 
@@ -789,9 +1331,12 @@ base creates one otherwise. Readable Width is first, followed by a separator and
 PDF's existing rotate/cursor/scroll/spread/properties entries. Only viewer-owned entries are
 readiness-gated: Menu and Readable Width remain available during loading/reloading.
 
+The shared Readable Width toolbar description belongs in **Settings > Editor**, alongside
+the shared Content layout and Readable width controls. Editor-specific pages keep only
+their own toolbar descriptions; Mind Map Editor documents Layout.
+
 `addAdditionalMenuActions()` appends Markdown's Image Host, Live Preview, In-Place Preview,
-Conceal long link destinations, Conceal Markdown Markers, Allow Auto Section Number and Debug
-after a separator.
+the Markers Concealment submenu, Allow Auto Section Number and Debug after a separator.
 Edit-only/Read-only visibility and encrypted-note restrictions still apply.
 Use the `addAction(QMenu *, ...)` overload for menu actions: it preserves
 window-scoped shortcuts without creating temporary toolbar buttons. The toolbar
@@ -1063,6 +1608,14 @@ the initialized map normally. Invalid nonblank input still fails closed.
 in forced edit mode; do not launch an external editor or depend on a `MainWindow2` pointer.
 Configuration persistence remains owned by `ConfigMgr2`; this action only opens the file.
 
+### United Entry settings
+
+Settings → **United Entry** owns the searchable **Expand All** checkbox, using the existing
+`widget.unitedEntryExpandAll` preference and normal Apply/Reset behavior. The input has no
+options menu; its clear button and busy indicator remain. `UnitedEntry::processInput()` reads
+the saved preference before each entry runs, so Apply affects subsequent result population
+without a restart. Keep the manager's expansion getter independent of configuration services.
+
 ### Mind map editor settings
 
 **Separate node properties panel** defaults on in Settings → Editor → Mind Map Editor.
@@ -1140,26 +1693,51 @@ popup outlines, without mutating producer names.
 
 ### Markdown concealment
 
-Markdown's top-right **Menu** exposes two Edit-only checkable preferences immediately below
-**In-Place Preview**; neither appears on the Settings page:
+Markdown's top-right **Menu** exposes an Edit-only **Markers Concealment** submenu immediately below
+**In-Place Preview**, with four exclusive radio actions in this order:
 
-- **Conceal long link destinations** retains `editor.markdown_editor.concealment`, default `true`.
-- **Conceal Markdown Markers** stores `editor.markdown_editor.concealMarkdownMarkers`, default
-  `true`. A saved `false` remains off. It hides emphasis, strong, strikethrough, mark, inline-code,
-  link, ATX-heading and inline-formula syntax through vtextedit's typed `MarkdownConcealHideSyntax`
-  rules.
+- **None** shows all Markdown source without concealment.
+- **Passive** shortens long link, image and reference URLs while leaving syntax visible.
+- **Moderate** hides supported formatting markers and link syntax away from the caret, reveals
+  them on entry (including group boundaries), and shortens image and reference URLs. Inline link
+  URLs hide and reveal with their syntax rather than shortening separately.
+- **Aggressive** hides supported formatting markers and link syntax, and shortens image and
+  reference URLs. Link syntax reveals on caret entry; inline link URLs are not separately shortened.
 
-Both preferences are global and persist independently through `ConfigMgr2`; moving the original
-control must preserve saved opt-outs. Menu actions call `MarkdownEditorController`, which emits
-the existing `ConfigEditorChanged` notification to refresh open editors. Each menu refreshes its
-checks from current configuration before opening, without emitting another toggle.
-`applyMarkdownConfigFields()` supplies both editor-config builders: destination opt-out clears
-URL rules before independently adding any enabled marker rules. Link-syntax hiding includes the
-link destination suffix; image/reference URL shortening remains separately controlled.
+The global portable preference is `editor.markdown_editor.concealmentMode` in `vnotex.json`,
+stored as `none`, `passive`, `moderate` or `aggressive`. The default remains Aggressive, as do
+missing or unknown values. Existing saved choices remain authoritative; adding `moderate` needs
+no preset migration.
+The old `concealment` and `concealMarkdownMarkers` booleans are ignored and no longer written;
+there is deliberately no compatibility migration. Explicit choices in the new setting persist.
+**Settings > Markdown Editor** provides a searchable, read-only description of the presets.
+
+The first displayed Markdown view (Read or Edit) opens **Choose Markdown Editing Experience**.
+Its three columns map **Conceal Markdown markers** (left) to Aggressive,
+**Both the left and the right look correct** (middle) to Moderate, and **Show Markdown markers**
+(right) to Passive. Aggressive preselects Conceal, Moderate preselects the middle choice, and
+None/Passive preselect Show. None remains menu-only.
+`SessionConfig::m_hasConfirmedMarkdownEditorConcealment` stores
+`editor.hasConfirmedMarkdownEditorConcealment` in `session.json`, default `false`. The controller
+marks it `true` before showing the nonblocking application-modal dialog, so restored tabs cannot
+duplicate it. Hidden/background tabs and minimized hosts defer it. OK applies the choice through
+the same controller as the toolbar; Escape/window-close retains the mode but consumes the prompt.
+The [version-specific session migration](../core/AGENTS.md#configuration-migration-contract)
+resets confirmation for known versions below `4.14.4` so existing users see the expanded choices
+on their next version change. It preserves their selected preset and the normal once-only behavior.
+
+Menu actions call `MarkdownEditorController::setConcealmentMode()`. An effective change emits
+`ConfigEditorChanged` to refresh open editors; selecting the current mode is a no-op. Both the
+parent menu and submenu refresh the exclusive check from current configuration before opening,
+without triggering another update. `applyMarkdownConfigFields()` supplies both editor-config
+builders, clearing rules for None or applying the corresponding upstream preset directly.
 
 Concealment is visual only: never rewrite Markdown or change dirty state, cursor or undo history.
-Hover reveals a shortened destination; moving the caret into an element reveals its grouped
-markers. Setext underlines and multiline math-block delimiters remain unchanged.
+Moderate formatting markers reveal on caret entry and hide again on exit. Aggressive formatting
+markers stay hidden during editing and character movement skips them; link syntax still reveals
+on entry. Setext underlines, multiline math-block delimiters, list markers and code fences remain
+unchanged. Shortened destinations keep five prefix graphemes, three middle dots and twelve suffix
+graphemes; hover exposes the full destination.
 
 Every bundled `text-editor.theme` defines `markdown-editor-styles.ConcealedText` with foreground
 and background colors. `ThemeService` resolves palette tokens before vtextedit loads the theme.
@@ -1203,6 +1781,13 @@ the hidden Edit Only viewer. Do not replace this with a delay, a visibility togg
 prefetch of unused fonts. The native hidden-page regression in `test_markdownviewer_js.cpp` holds
 global readiness and an unrelated font pending while requiring math to wait for its own font and
 then finish reading, PNG preview and export.
+
+The template clips `#vx-inplace-preview` in a fixed zero-sized box, outside reader flow and
+scroll geometry. Keep it laid out: `display:none`, inherited visibility or opacity can break
+measurement or raster output. Each job supplies its own definite pixel width; percentage widths
+against the staging root resolve to zero. Temporary math/diagram DOM must never paint in Read,
+including during reader recreation. `test_markdownwebjobs` observes attached staging geometry
+and scroll isolation using the production template, without test-only hiding styles.
 
 ### Markdown renderer lifetime
 

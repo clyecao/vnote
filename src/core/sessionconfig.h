@@ -1,6 +1,7 @@
 #ifndef SESSIONCONFIG_H
 #define SESSIONCONFIG_H
 
+#include "httpapiconfig.h"
 #include "iconfig.h"
 
 #include <QSize>
@@ -109,6 +110,9 @@ public:
 
   void fromJson(const QJsonObject &p_jobj) Q_DECL_OVERRIDE;
 
+  HttpApiConfig &getHttpApiConfig();
+  const HttpApiConfig &getHttpApiConfig() const;
+
   const QString &getNewNotebookDefaultRootFolderPath() const;
   void setNewNotebookDefaultRootFolderPath(const QString &p_path);
 
@@ -118,6 +122,9 @@ public:
   void update() Q_DECL_OVERRIDE;
 
   QJsonObject toJson() const Q_DECL_OVERRIDE;
+
+  // Called on a version change after loading; persists any migrated session values.
+  void doVersionSpecificOverride(const QString &p_previousVersion);
 
   SessionConfig::MainWindowStateGeometry getMainWindowStateGeometry() const;
   void setMainWindowStateGeometry(const SessionConfig::MainWindowStateGeometry &p_state);
@@ -139,6 +146,9 @@ public:
 
   bool getStartOnSystemStartup() const;
   void setStartOnSystemStartup(bool p_enabled);
+
+  bool getHasConfirmedMarkdownEditorConcealment() const;
+  void setHasConfirmedMarkdownEditorConcealment(bool p_confirmed);
 
   qreal getMarkdownZoomFactorInReadMode() const;
   void setMarkdownZoomFactorInReadMode(qreal p_factor);
@@ -198,6 +208,20 @@ public:
   int getNextToolTipIndex() const;
   void setNextToolTipIndex(int p_index);
 
+  // Epoch milliseconds (UTC) of the last update check that was *started*.
+  // 0 means "never checked". Stored as a decimal string because IConfig::readInt
+  // is 32-bit and cannot hold an epoch-millisecond value.
+  qint64 getLastUpdateCheckTime() const;
+  void setLastUpdateCheckTime(qint64 p_msSinceEpoch);
+
+  // True when a new update check should be started now, i.e. the last recorded
+  // check is older than p_intervalMs, never happened, or is dated in the future
+  // (clock moved backwards / corrupted value -> treat as stale).
+  bool isUpdateCheckDue(qint64 p_nowMsSinceEpoch, qint64 p_intervalMs) const;
+
+  // Default throttle between two automatic (startup) update checks.
+  static constexpr qint64 c_updateCheckIntervalMs = 24LL * 60 * 60 * 1000;
+
   const QStringList &getSearchHistory() const;
   void addSearchHistory(const QString &p_keyword);
   void setSearchHistory(const QStringList &p_history);
@@ -231,11 +255,11 @@ private:
 
   QJsonArray saveQuickAccessItems() const;
 
-  void doVersionSpecificOverride();
-
   void loadExportOption(const QJsonObject &p_session);
 
   QJsonObject saveExportOption() const;
+
+  HttpApiConfig m_httpApiConfig;
 
   QString m_newNotebookDefaultRootFolderPath;
 
@@ -254,6 +278,8 @@ private:
 
   // Whether to launch VNote on system startup (effected on Windows only).
   bool m_startOnSystemStartup = false;
+
+  bool m_hasConfirmedMarkdownEditorConcealment = false;
 
   qreal m_markdownZoomFactorInReadMode = 1.0;
 
@@ -294,6 +320,9 @@ private:
   QString m_lastToolTipDate;
 
   int m_nextToolTipIndex = 0;
+
+  // Epoch ms (UTC) of the last started update check. 0 == never.
+  qint64 m_lastUpdateCheckTime = 0;
 
   // Keyword search history (most recent first, capped at 20).
   QStringList m_searchHistory;

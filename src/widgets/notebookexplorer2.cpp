@@ -1740,32 +1740,34 @@ void NotebookExplorer2::newQuickNote() {
     return;
   }
 
-  // Show selection dialog.
-  auto *themeService = m_services.get<ThemeService>();
-  SelectDialog dialog(
-      tr("New Quick Note"),
-      themeService->paletteColor(QStringLiteral("widgets#quickselector#item_icon#fg")),
-      themeService->paletteColor(QStringLiteral("widgets#quickselector#item_icon#border")),
-      dialogParent);
-  if (!dialogParent) {
-    dialog.setWindowModality(Qt::ApplicationModal);
-    // A global hotkey does not activate the application. Wait until exec() shows the picker.
-    QTimer::singleShot(0, &dialog, [&dialog]() {
-      if (dialog.isVisible()) {
-        dialog.raise();
-        dialog.activateWindow();
-      }
-    });
-  }
-  for (int i = 0; i < schemes.size(); ++i) {
-    dialog.addSelection(schemes[i].m_name, i);
-  }
+  int selection = 0;
+  if (schemes.size() > 1) {
+    auto *themeService = m_services.get<ThemeService>();
+    SelectDialog dialog(
+        tr("New Quick Note"),
+        themeService->paletteColor(QStringLiteral("widgets#quickselector#item_icon#fg")),
+        themeService->paletteColor(QStringLiteral("widgets#quickselector#item_icon#border")),
+        dialogParent);
+    if (!dialogParent) {
+      dialog.setWindowModality(Qt::ApplicationModal);
+      // A global hotkey does not activate the application. Wait until exec() shows the picker.
+      QTimer::singleShot(0, &dialog, [&dialog]() {
+        if (dialog.isVisible()) {
+          dialog.raise();
+          dialog.activateWindow();
+        }
+      });
+    }
+    for (int i = 0; i < schemes.size(); ++i) {
+      dialog.addSelection(schemes[i].m_name, i);
+    }
 
-  if (dialog.exec() != QDialog::Accepted) {
-    return;
-  }
+    if (dialog.exec() != QDialog::Accepted) {
+      return;
+    }
 
-  int selection = dialog.getSelection();
+    selection = dialog.getSelection();
+  }
   const auto &scheme = schemes[selection];
 
   // Supply the current folder for an empty scheme; the controller resolves explicit paths.
@@ -2339,10 +2341,11 @@ void NotebookExplorer2::onInfoMessage(const QString &p_title, const QString &p_m
 // explorer bridge → controller → service chain. The unchanged-order check at
 // the view layer prevents spurious service calls.
 //
-// The dialog-show logic is extracted into runSortDialogsForChildren (a public
-// static helper) so widget tests can exercise it without instantiating a full
+// The dialog-show logic is extracted into runSortDialogsForChildren (a free
+// function) so widget tests can exercise it without instantiating a full
 // NotebookExplorer2.
-void NotebookExplorer2::onSortRequested(const NodeIdentifier &p_parentId) {
+void NotebookExplorer2::onSortRequested(const NodeIdentifier &p_parentId,
+                                        const NodeIdentifier &p_currentNodeId) {
   auto *notebookService = m_services.get<NotebookCoreService>();
   if (!notebookService || !m_nodeExplorer) {
     return;
@@ -2351,14 +2354,15 @@ void NotebookExplorer2::onSortRequested(const NodeIdentifier &p_parentId) {
   const QJsonObject childrenJson =
       notebookService->listFolderChildren(p_parentId.notebookId, p_parentId.relativePath);
 
-  const SortDialogResult result = runSortDialogsForChildren(p_parentId, childrenJson, this);
+  const SortDialogResult result =
+      runSortDialogsForChildren(p_parentId, p_currentNodeId, childrenJson, this);
 
   if (!result.newFolderOrder.isEmpty() || !result.newFileOrder.isEmpty()) {
     m_nodeExplorer->requestReorderNodes(p_parentId, result.newFolderOrder, result.newFileOrder);
   }
 }
 
-// NotebookExplorer2::runSortDialogsForChildren lives in
+// runSortDialogsForChildren lives in
 // notebookexplorer2_sortseam.cpp so widget tests can link the helper without
 // dragging in the full NotebookExplorer2 TU and its ~20 transitive widget /
 // service deps.

@@ -12,6 +12,11 @@
 #include <core/fileopensettings.h>
 #include <core/global.h>
 #include <core/nodeidentifier.h>
+#include <widgets/outlineprovider.h>
+
+namespace m3::qt {
+struct OutlineEntry;
+}
 
 namespace vnotex {
 
@@ -55,13 +60,25 @@ public:
   virtual bool closePreviewsForSources(const QVector<ID> &p_sourceIds) = 0;
   virtual QStringList previewWorkspacesForSourceNotebook(const QString &p_notebookId) const = 0;
 
-  // Snapshot navigation: validate before consent and again after revealing the source.
+  // Snapshot navigation: validate the source and navigate without activating its window.
   virtual bool isOutlineHeadingCurrent(ID p_sourceId, quint64 p_generation, int p_headingIndex,
                                        const QByteArray &p_fingerprint) const = 0;
   virtual bool navigateToOutlineHeading(ID p_sourceId, quint64 p_generation, int p_headingIndex,
                                         const QByteArray &p_fingerprint) = 0;
 
-  // Buffer/window management
+  virtual OutlineSourceSnapshot outlineSourceSnapshot(ID, quint64) const { return {}; }
+  virtual QSharedPointer<OutlineSourceEditReceipt>
+  applyOutlineSourceEdit(ID, quint64, const OutlineSourceEdit &, bool) {
+    return {};
+  }
+
+  virtual bool confirmOutlineSourceMove(ID, quint64, const OutlineSourceEdit &) { return false; }
+  virtual bool synchronizeOutlineMindMapTopics(ID, const QVector<m3::qt::OutlineEntry> &) {
+    return false;
+  }
+
+  // Buffer/window management. Unsupported types report a view-creation failure
+  // before resolving the workspace, so rejection does not need to create a host.
   virtual void openBuffer(const Buffer2 &p_buffer, const QString &p_fileType,
                           const QString &p_workspaceId, const FileOpenSettings &p_settings) = 0;
   virtual bool canReuseViewWindow(ID p_windowId, const QString &p_fileType) const = 0;
@@ -80,7 +97,8 @@ public:
   // Close the view window. Returns true if closed, false if cancelled by user
   // (e.g., unsaved changes dialog). Callers must handle false for abort semantics.
   virtual bool closeViewWindow(ID p_windowId, bool p_force) = 0;
-  // Apply file open settings (scroll, highlight) to an already-created window.
+  // Apply forced mode through the normal guarded transition, then scroll/highlight.
+  // The window may be destroyed by a mode transition; do not navigate it afterward.
   virtual void applyFileOpenSettings(ID p_windowId, const FileOpenSettings &p_settings) = 0;
 
   // Conversion-only: freeze exact live IDs (including hidden/detached views).
@@ -112,7 +130,8 @@ public:
 
   // Detach: host a workspace in a separate top-level DetachedWindow (kept OUT of
   // the main splitter tree, so it is excluded from layout serialization and
-  // main-tree navigation). Used by the "Detach" action.
+  // main-tree navigation). The host stays hidden until a successful view transfer
+  // or buffer open supplies its content and shows it.
   virtual void hostWorkspaceInDetachedWindow(const QString &p_workspaceId) = 0;
 
   // Transfer a view window from a main split into the detached window hosting

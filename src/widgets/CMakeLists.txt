@@ -53,6 +53,7 @@ target_sources(vnote PRIVATE
     dialogs/settings/syncpage.cpp dialogs/settings/syncpage.h
     dialogs/settings/texteditorpage.cpp dialogs/settings/texteditorpage.h
     dialogs/settings/themepage.cpp dialogs/settings/themepage.h
+    dialogs/settings/unitedentrypage.cpp dialogs/settings/unitedentrypage.h
     dialogs/settings/vipage.cpp dialogs/settings/vipage.h
     dialogs/snippetinfowidget2.cpp dialogs/snippetinfowidget2.h
     dialogs/snippetpropertiesdialog2.cpp dialogs/snippetpropertiesdialog2.h
@@ -83,11 +84,13 @@ target_sources(vnote PRIVATE
     editors/previewdispatchplanner.cpp editors/previewdispatchplanner.h
     editors/previewhelper.cpp editors/previewhelper.h
     editors/previewscaleutils.cpp editors/previewscaleutils.h
+    editors/simplemarkdowneditor.cpp editors/simplemarkdowneditor.h
     editors/statusbar.cpp editors/statusbar.h
     editors/editorstatusbarbinder.cpp editors/editorstatusbarbinder.h
     editors/statuswidget.cpp editors/statuswidget.h
     editors/statusoverlay.h
     editors/texteditor.cpp editors/texteditor.h
+    editors/todoeditor.cpp editors/todoeditor.h
     editors/webviewadapter.cpp editors/webviewadapter.h
     editreaddiscardaction.cpp editreaddiscardaction.h
     encodingbutton.cpp encodingbutton.h
@@ -145,6 +148,7 @@ target_sources(vnote PRIVATE
     tagviewer2.cpp tagviewer2.h
     textviewwindow2.cpp textviewwindow2.h
     textviewwindowhelper.h
+    todoviewwindow.cpp todoviewwindow.h
     typstviewwindow.cpp typstviewwindow.h
     titlebar.cpp titlebar.h
     titlebarcontainer.cpp titlebarcontainer.h
@@ -157,6 +161,7 @@ target_sources(vnote PRIVATE
     viewsplit2.cpp viewsplit2.h
     viewwindow2.cpp viewwindow2.h
     viewwindowtoolbarhelper2.cpp viewwindowtoolbarhelper2.h
+    viewwindowtoolbarhelper2actions.cpp
     webpage.cpp webpage.h
     webviewer.cpp webviewer.h
     widgetviewwindow2.cpp widgetviewwindow2.h

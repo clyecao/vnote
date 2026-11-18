@@ -14,6 +14,19 @@
 | `NavigationModeService` | Keyboard navigation mode service |
 | `ToolTipService` | One scoped startup attempt to post a localized daily usage tip |
 
+## File viewer routing
+
+`Text` owns the built-in plaintext editor. `Others` has no built-in creator: explicit
+file opens use the controller's system-application fallback, after any configured
+per-suffix external program. Dispatch happens before tab replacement or detached-workspace
+creation. Registered suffixes win; otherwise MIME inference uses the resolved file path
+and may select `Text` or `Image`. Encrypted notes use their authenticated editor type.
+
+Session and fresh-workspace restoration skip types without a registered creator, without
+launching external applications or removing core buffers/workspace membership. Locked
+encrypted notes retain their unlock placeholder. Coverage: `test_viewarea_tab_reuse` tests
+Others dispatch, inferred viewers, legacy sessions and already-unlocked protected editors.
+
 ## Qt application appearance
 
 On Qt 6.8+, `ThemeService` synchronizes `QStyleHints::colorScheme` on startup,
@@ -41,6 +54,55 @@ metadata-based system themes, and Windows standard-menu icon contrast in both
 Undo/Redo states. Run on the native Windows platform to exercise the icon provider;
 offscreen runs cannot verify it. Restore the system scheme and palette between test slots.
 
+### Scrollbar colors
+
+All non-Native bundled themes share `widgets#qscrollbar#handle#bg`,
+`widgets#qscrollbar#handle#hover#bg` and `widgets#qscrollbar#handle#pressed#bg`
+between native QSS handles and web CSS thumbs (`:active` maps to pressed).
+Do not substitute icon foregrounds or independent translucent colors. Native
+keeps OS-owned widget scrollbars and its separate translucent web fallback.
+
+Non-Native web thumbs retain a 10px rail/hit area with a 2px transparent border
+and `background-clip: padding-box`, painting the same 6px thickness as native
+handles with 2px margins. Use `background-color` in every thumb state: the
+`background` shorthand resets clipping and paints over the transparent inset.
+
+This is bundled CSS, not saved configuration: no settings migration is needed;
+installed copies use the normal versioned resource refresh without replacing custom themes.
+
+### Tree spacing
+
+The optional `palette.json` metadata flag `compact-tree-spacing` enables 12px
+indentation and 4px item padding/internal spacing for every `QTreeView`,
+including `QTreeWidget` subclasses. All bundled themes except `native` opt in;
+their generic QSS item padding is `4px 4px`, preserving row heights, fonts,
+icons and theme-specific borders. Their tree inline editors drop the form-field
+minimum height/padding to fit their rows.
+
+Custom tree delegates use `TreeViewUtils::horizontalSpacing()` to distinguish
+outer content insets from icon/count gaps. For opted-in trees, an undecorated
+style probe measures the left and right insets independently, including theme
+borders and Qt's native focus-frame text margin. `ItemViewUtils::textRect()`
+shares that glyph-origin calculation with highlighted standard items. Initialize
+the view option first so model fonts participate; do not treat the QSS padding
+number alone as the text origin or count custom icons twice. Row heights are
+unchanged, and non-opted-in views keep the caller's legacy spacing.
+
+`Application::notify()` applies the active `ThemeService` policy through
+`TreeViewUtils` before initial `Polish` and before Qt handles `StyleChange` for
+an already-polished tree. Ignore constructor-time `StyleChange`: sidebar setup
+may not have applied its default indentation yet. On entry, record that tree's
+current indentation; repeated refreshes must not overwrite it. On exit, restore
+it and clear the transient widget properties. This preserves platform defaults
+and explicit per-view values rather than forcing every tree back to 16px.
+
+The application's service reference is guarded; an absent/destroyed service is
+a no-op. Preview theme services/local QSS do not drive this policy. Missing
+metadata keeps the legacy spacing, including user-defined themes; this changes
+bundled theme styling, not app/session configuration, so no migration is needed.
+Existing installed theme copies still follow the normal versioned resource refresh;
+this rollout does not overwrite user theme folders.
+
 ## Native MindMap image transport
 
 `MindMapImageLoader` handles unprotected data/file/relative/HTTP(S) resources only. Preserve the
@@ -65,13 +127,15 @@ reset therefore restarts daily eligibility and rotation without undoing opt-out.
 keys, then retires the old main-config keys through normal persistence. Explicit
 session values, including an empty date and index zero, take precedence.
 
-Select catalog translations using `QLocale().uiLanguages()` in preference order through
-`findLocalizedValue()` in `utils/localeutils.h` (shared with theme names and bundled docs).
-The tip callback trims each candidate; after no usable match, fall back to `en_US`.
+Daily and random dashboard tips use `DocsUtils::getUiLanguages()`, the expanded language
+tags of the VNote translation catalog loaded at startup, just like bundled documents.
+Do not use `QLocale().uiLanguages()` or `getLocaleToUse()`: Qt can skip an untranslated
+system preference (including English) and load a later catalog, independently of the
+regional-format locale. Both tip paths pass the resolved tags to `findLocalizedValue()`
+in `utils/localeutils.h`; trim each candidate and fall back to `en_US` on no usable match.
 The helper's tag/canonical/language ordering is documented in `utils/AGENTS.md`.
-Do not use `getLocaleToUse()` here: it returns the regional-format locale, which
-can differ from the system UI language. Startup already applies explicit language
-settings through `QLocale::setDefault()` before tips are produced.
+Coverage: `test_configmgr2` and `test_greetingsticker` deliberately conflict the loaded
+catalog language with the regional locale, including the default language setting.
 
 Keep the producer stack-scoped after the main-window startup hook. Its retained
 opt-out action captures only a `QPointer<ConfigMgr2>`; no producer or config-field
@@ -132,6 +196,38 @@ changes through one 50 ms single-shot timer. Start it only when inactive: contin
 resizing still updates the column periodically instead of waiting for the drag to end.
 Each callback measures current content and viewport geometry. Tests should wait for
 column coverage or scrollbar behavior, not a fixed sleep or the timer interval.
+
+## Tree child-count badges
+
+`TreeChildCountDelegate` (`utils/treechildcountdelegate.h`) is the shared opt-in
+renderer for single-column trees. Parent the delegate to the `QTreeView` when
+installing it: the horizontal scrollbar connection repaints viewport-fixed badges
+after Qt scroll-copies the row contents. No per-row widgets or model writes.
+
+The default count is the displayed model's immediate `rowCount(index)`, including
+proxy filtering, as used by Outline and Tasks. Tags supplies `TagModel::NoteCountRole`
+through the delegate's optional count-role constructor argument: direct note counts
+are cached and do not change with filtering or child-tag expansion.
+`NotebookNodeDelegate` derives from it and passes cached folder totals to the protected
+layout/paint/width helpers, so lazy loading and the folder-only proxy do not change
+notebook count semantics. Never query services or fetch children from a paint or
+size-hint path. Zero/unknown counts are hidden.
+
+Badges use the initialized font, theme spacing and foreground; single digits are
+circular and longer counts widen into pills without increasing row height. Anchor
+X to the viewport, not the column or indented row. Preserve name clearance in both
+painting and width hints, including fractional text advances at maximum scroll.
+The standard delegate also reserves the difference between text chrome's right inset
+and the badge's viewport inset. `TreeHorizontalScrollHelper` already coalesces
+`dataChanged` into column remeasurement, including count digit-boundary changes.
+Keep badge painting active when indentation moves the label outside the viewport.
+Selection, input and inline editing remain owned by Qt. No settings/schema changed;
+no configuration migration is needed.
+
+Coverage: `test_treechildcountdelegate` exercises scrolling, resize, row selection,
+immediate/filtered counts and deeply indented rows; `test_notebooknodedelegate_sizehint`
+covers cached notebook totals and content widths. Native smoke must also inspect
+screen captures after scrolling, rather than relying only on forced widget renders.
 
 ## External-link confirmation
 

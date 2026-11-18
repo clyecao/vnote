@@ -40,6 +40,7 @@
 #include <vtextedit/vtexteditor.h>
 #include <vxcore/vxcore.h>
 
+#include <controllers/outlinesectioneditor.h>
 #include <controllers/typstviewwindowcontroller.h>
 #include <core/configmgr2.h>
 #include <core/editorconfig.h>
@@ -734,6 +735,10 @@ TypstViewWindow::InsertionResult TypstViewWindow::insertFromMimeData(const QMime
 }
 
 bool TypstViewWindow::eventFilter(QObject *p_watched, QEvent *p_event) {
+  if (m_editor && (p_watched == m_editor || p_watched == m_editor->getTextEdit()) &&
+      (p_event->type() == QEvent::ReadOnlyChange || p_event->type() == QEvent::EnabledChange)) {
+    updateOutlineReorderSupport();
+  }
   if (p_watched == m_typstEditor && p_event->type() == QEvent::Resize && m_imageOverlay) {
     m_imageOverlay->setGeometry(m_typstEditor->rect());
   }
@@ -1171,6 +1176,7 @@ void TypstViewWindow::syncInsertionActions() {
                          (action != m_insertImageAction || getBuffer().isFileBacked()));
     }
   }
+  updateOutlineReorderSupport();
 }
 
 void TypstViewWindow::changeEvent(QEvent *p_event) {
@@ -1225,11 +1231,10 @@ TypstViewWindow::TypstViewWindow(ServiceLocator &p_services, const Buffer2 &p_bu
 }
 
 TypstViewWindow::~TypstViewWindow() {
-  invalidateContextResources();
-  invalidateInsertion();
-  setViewFullScreen(false);
-  if (m_nativeInteraction && m_nativeInteraction.use_count() > 1 && m_typstEditor) {
-    const auto interaction = m_nativeInteraction;
+  // QWidget deletes children after our members have been destroyed. The native
+  // editor emits resource invalidation in its destructor, so retire callbacks now,
+  // including ordinary closes that do not defer the editor's destruction.
+  if (m_typstEditor) {
     auto *edit = m_editor->getTextEdit();
     for (auto *sender : {static_cast<QObject *>(m_typstEditor), static_cast<QObject *>(m_editor),
                          static_cast<QObject *>(edit), static_cast<QObject *>(edit->document()),
@@ -1238,6 +1243,12 @@ TypstViewWindow::~TypstViewWindow() {
     }
     edit->viewport()->removeEventFilter(this);
     m_typstEditor->removeEventFilter(this);
+  }
+  invalidateContextResources();
+  invalidateInsertion();
+  setViewFullScreen(false);
+  if (m_nativeInteraction && m_nativeInteraction.use_count() > 1 && m_typstEditor) {
+    const auto interaction = m_nativeInteraction;
     interaction->retiredEditor = m_typstEditor;
     const auto retired = interaction->retiredEditor;
     if (auto *popup = ButtonPopup::activePopupWidget(); popup && retired->isAncestorOf(popup)) {
@@ -1515,6 +1526,8 @@ void TypstViewWindow::createEditor() {
 
 void TypstViewWindow::connectEditorSignals() {
   auto *source = m_editor->getTextEdit();
+  source->installEventFilter(this);
+  m_editor->installEventFilter(this);
   source->viewport()->installEventFilter(this);
   m_typstEditor->installEventFilter(this);
   connect(m_typstEditor, &vte::VTypstEditor::resourceContextMenuRequested, this,
@@ -1525,9 +1538,22 @@ void TypstViewWindow::connectEditorSignals() {
           });
   connect(m_typstEditor, &vte::VTypstEditor::imageDataReady, this,
           &TypstViewWindow::handleContextImageData);
-  connect(m_typstEditor, &vte::VTypstEditor::resourceContextsInvalidated, this,
-          [this] { invalidateContextResources(false); });
-  connect(source, &vte::VTextEdit::contentsChanged, this, [this] { invalidateContextResources(); });
+  connect(m_typstEditor, &vte::VTypstEditor::resourceContextsInvalidated, this, [this] {
+    const QPointer<TypstViewWindow> guard(this);
+    invalidateContextResources(false);
+    if (guard)
+      updateOutlineReorderSupport();
+  });
+  connect(source, &vte::VTextEdit::contentsChanged, this, [this] {
+    const QPointer<TypstViewWindow> guard(this);
+    ++m_outlineContentGeneration;
+    if (!m_applyingOutlineSourceEdit)
+      invalidateOutlineSourceEdits();
+    else
+      emit outlineSourceChanged();
+    if (guard)
+      invalidateContextResources();
+  });
   // The native editor's earlier slot has already built its standard/spellcheck menu.
   connect(source, &vte::VTextEdit::contextMenuEventRequested, this,
           [this](QContextMenuEvent *, bool *, QScopedPointer<QMenu> *p_menu) {
@@ -1590,7 +1616,16 @@ void TypstViewWindow::connectEditorSignals() {
   connect(m_editor->getTextEdit(), &QTextEdit::cursorPositionChanged, this,
           &TypstViewWindow::updateCurrentHeading);
   connect(m_typstEditor, &vte::VTypstEditor::headingsUpdated, this,
-          &TypstViewWindow::refreshOutline);
+          [this](const QVector<vte::TypstHeadingInfo> &p_headings) {
+            const QPointer<TypstViewWindow> guard(this);
+            refreshOutline(p_headings);
+            if (guard)
+              reconcileOutlineSourceEdit(true);
+          });
+  connect(m_typstEditor, &vte::VTypstEditor::compileStatusChanged, this,
+          [this](vte::VTypstEditor::CompileStatus, const QString &) {
+            reconcileOutlineSourceEdit(false);
+          });
   connect(m_typstEditor, &vte::VTypstEditor::modeChanged, this,
           [this](vte::VTypstEditor::Mode) { syncModeFromEditor(); });
   connect(m_typstEditor, &vte::VTypstEditor::livePreviewEnabledChanged, this,
@@ -1628,6 +1663,9 @@ void TypstViewWindow::connectEditorSignals() {
 
 void TypstViewWindow::prepareBufferReplacement() {
   const QPointer<TypstViewWindow> guard(this);
+  invalidateOutlineSourceEdits();
+  if (!guard)
+    return;
   invalidateContextResources();
   if (guard) {
     invalidateInsertion();
@@ -1664,6 +1702,9 @@ void TypstViewWindow::bindBufferResources() {
 
 void TypstViewWindow::syncEditorFromBuffer() {
   const QPointer<TypstViewWindow> insertionGuard(this);
+  invalidateOutlineSourceEdits();
+  if (!insertionGuard)
+    return;
   invalidateContextResources();
   if (!insertionGuard) {
     return;
@@ -1751,6 +1792,9 @@ void TypstViewWindow::applyProjectIdentity() {
 
 void TypstViewWindow::handleNodeRetargeted(const NodeIdentifier &p_newNodeId) {
   const QPointer<TypstViewWindow> insertionGuard(this);
+  invalidateOutlineSourceEdits();
+  if (!insertionGuard)
+    return;
   invalidateContextResources();
   if (!insertionGuard) {
     return;
@@ -1778,6 +1822,8 @@ void TypstViewWindow::handleNodeRetargeted(const NodeIdentifier &p_newNodeId) {
 }
 
 bool TypstViewWindow::aboutToClose(bool p_force) {
+  if (isOutlineSourceEditBusy())
+    return false;
   const QPointer<TypstViewWindow> guard(this);
   const QPointer<TypstViewWindowController> controller(m_controller);
   const auto generation = getBufferGeneration();
@@ -1891,20 +1937,29 @@ QSharedPointer<OutlineProvider> TypstViewWindow::getOutlineProvider() const {
   return m_outlineProvider;
 }
 
+bool TypstViewWindow::activateOutlineHeading(int p_index) {
+  return navigateToHeading(p_index, false);
+}
+
 void TypstViewWindow::setupOutlineProvider() {
   m_outlineProvider = QSharedPointer<OutlineProvider>::create();
   m_outlineProvider->setOutline(QSharedPointer<Outline>::create());
   m_outlineProvider->setAutoSectionNumberAllowed(false);
-  m_outlineProvider->setReorderSupported(false);
+  connect(m_outlineProvider.data(), &OutlineProvider::moveRequested, this,
+          &TypstViewWindow::reorderOutline);
   connect(m_outlineProvider.data(), &OutlineProvider::headingClicked, this,
-          &TypstViewWindow::navigateToHeading);
+          [this](int p_index) { navigateToHeading(p_index, true); });
 }
 
 void TypstViewWindow::clearOutline() {
   m_outlineHeadings.clear();
+  m_outlineSourceHeadings.clear();
   // setOutline also resets the current index before notifying either outline consumer.
   const auto provider = m_outlineProvider;
+  const QPointer<TypstViewWindow> guard(this);
   provider->setOutline(QSharedPointer<Outline>::create());
+  if (guard)
+    emit outlineSourceChanged();
 }
 
 void TypstViewWindow::refreshOutline(const QVector<vte::TypstHeadingInfo> &p_headings) {
@@ -1912,18 +1967,477 @@ void TypstViewWindow::refreshOutline(const QVector<vte::TypstHeadingInfo> &p_hea
     clearOutline();
     return;
   }
+  m_outlineHeadings = p_headings;
+  m_outlineSourceHeadings = m_typstEditor->getSourceHeadings();
   auto outline = QSharedPointer<Outline>::create();
+  outline->m_maxLevel = INT_MAX;
+  outline->m_reorderSupported = canReorderOutline();
   outline->m_headings.reserve(p_headings.size());
   for (const auto &heading : p_headings) {
     outline->m_headings.append(Outline::Heading(heading.m_title, heading.m_level));
+    outline->m_headings.last().m_reorderable = outline->m_reorderSupported;
+    outline->m_headings.last().m_acceptsChildren = outline->m_reorderSupported;
   }
-  m_outlineHeadings = p_headings;
   const auto provider = m_outlineProvider;
   const QPointer<TypstViewWindow> guard(this);
   provider->setOutline(outline);
   if (guard && provider->getOutline() == outline) {
     updateCurrentHeading();
+    if (guard)
+      emit outlineSourceChanged();
   }
+}
+
+bool TypstViewWindow::canReorderOutline() const {
+  // QVector's shared backing storage identifies the accepted immutable native snapshot.
+  // Input invalidation clears both native getters synchronously, before any recompilation.
+  return m_typstEditor && canInsert() && !m_insertion && !isNoteConversionFrozen() &&
+         !getServices().get<BufferService>()->isContentReplacementActive(getBuffer().id()) &&
+         m_typstEditor->mode() == vte::VTypstEditor::Mode::Edit && !m_typstEditor->isReadOnly() &&
+         !m_outlineSourceHeadings.isEmpty() &&
+         m_outlineSourceHeadings.constData() == m_typstEditor->getSourceHeadings().constData() &&
+         m_outlineHeadings.constData() == m_typstEditor->getHeadings().constData() &&
+         (getBuffer().getRevision() == m_lastKnownRevision || outlineSourceWriterCurrent());
+}
+
+void TypstViewWindow::updateOutlineReorderSupport() {
+  if (m_outlineProvider && m_typstEditor &&
+      m_outlineProvider->getOutline()->m_reorderSupported != canReorderOutline()) {
+    refreshOutline(m_typstEditor->getHeadings());
+  }
+}
+
+bool TypstViewWindow::outlineSourceWriterCurrent() const {
+  auto *service = getServices().get<BufferService>();
+  const auto eligible = [this, service] {
+    return service && m_typstEditor && m_propagateEditorToBuffer && canInsert() && !m_insertion &&
+           !isNoteConversionFrozen() && !service->isContentReplacementActive(getBuffer().id()) &&
+           (!getBuffer().isEncrypted() || !service->isProtectedLocking()) &&
+           m_typstEditor->mode() == vte::VTypstEditor::Mode::Edit && !m_typstEditor->isReadOnly();
+  };
+  if (!eligible())
+    return false;
+  const QPointer<const TypstViewWindow> guard(this);
+  const auto generation = getBufferGeneration();
+  const auto buffer = getBuffer();
+  const auto activeFile = m_typstEditor->activeFile();
+  const int revision = m_editor->document()->revision();
+  QString text;
+  bool hasWriter = false;
+  if (!service->captureActiveWriterContent(buffer.id(), &text, &hasWriter) || !hasWriter ||
+      !guard || generation != getBufferGeneration() || buffer.id() != getBuffer().id() ||
+      !eligible() || activeFile != m_typstEditor->activeFile() ||
+      revision != m_editor->document()->revision() || text != m_editor->getText())
+    return false;
+  if (buffer.getRevision() != m_lastKnownRevision) {
+    VxCoreError error = VXCORE_OK;
+    const auto raw = buffer.peekContentRaw(&error);
+    const auto encoded = service->encodeContent(buffer.id(), text);
+    if (error != VXCORE_OK || raw != QByteArrayView(encoded))
+      return false;
+  }
+  return true;
+}
+
+bool TypstViewWindow::outlineSourceHeadingsCurrent() const {
+  if (!canReorderOutline())
+    return false;
+  const int length = m_editor->document()->characterCount() - 1;
+  int next = 0;
+  int previousEnd = -1;
+  for (const auto &heading : m_outlineSourceHeadings) {
+    if (heading.m_level < 1 || heading.m_startPos < 0 || heading.m_startPos < previousEnd ||
+        heading.m_endPos <= heading.m_startPos || heading.m_endPos > length ||
+        heading.m_bodyStartPos < heading.m_startPos ||
+        heading.m_bodyEndPos < heading.m_bodyStartPos || heading.m_bodyEndPos > heading.m_endPos)
+      return false;
+    int previousRangeEnd = heading.m_bodyStartPos;
+    for (const auto &range : heading.m_preservedBodyRanges) {
+      if (range.first < previousRangeEnd || range.second <= range.first ||
+          range.second > heading.m_bodyEndPos)
+        return false;
+      previousRangeEnd = range.second;
+    }
+    if (heading.m_headingIndex >= 0) {
+      if (heading.m_headingIndex != next || next >= m_outlineHeadings.size())
+        return false;
+      const auto &visible = m_outlineHeadings.at(next++);
+      if (!isActiveFileHeading(visible) || visible.m_startPos != heading.m_startPos ||
+          visible.m_endPos != heading.m_endPos || visible.m_level != heading.m_level)
+        return false;
+    }
+    previousEnd = heading.m_endPos;
+  }
+  return next == m_outlineHeadings.size();
+}
+
+OutlineSourceSnapshot TypstViewWindow::outlineSourceSnapshot() const {
+  OutlineSourceSnapshot snapshot;
+  snapshot.m_outline = m_outlineProvider->getOutline();
+  snapshot.m_contentGeneration = m_outlineContentGeneration;
+  if (m_applyingOutlineSourceEdit || m_pendingOutlineSourceEdit ||
+      !outlineSourceHeadingsCurrent() || !outlineSourceWriterCurrent())
+    return snapshot;
+  snapshot.m_revision = m_editor->document()->revision();
+  snapshot.m_headingPositions.reserve(m_outlineHeadings.size());
+  for (const auto &heading : m_outlineHeadings)
+    snapshot.m_headingPositions.append(heading.m_startPos);
+  return snapshot;
+}
+
+void TypstViewWindow::invalidateOutlineSourceEdits() {
+  ++m_outlineHistoryAuthorization;
+  if (m_pendingOutlineSourceEdit) {
+    m_pendingOutlineSourceEdit->m_stale = true;
+    m_pendingOutlineSourceEdit->m_pending = false;
+    m_pendingOutlineSourceEdit.reset();
+  }
+  emit outlineSourceChanged();
+}
+
+void TypstViewWindow::reconcileOutlineSourceEdit(bool p_publication) {
+  const auto receipt = m_pendingOutlineSourceEdit;
+  if (!receipt || m_applyingOutlineSourceEdit || !m_typstEditor ||
+      receipt->m_compilationEpoch != m_typstEditor->compilationEpoch() ||
+      receipt->m_compilationGeneration != m_typstEditor->compilationGeneration())
+    return;
+  const auto status = m_typstEditor->compileStatus();
+  if (status == vte::VTypstEditor::CompileStatus::Error ||
+      status == vte::VTypstEditor::CompileStatus::Unavailable) {
+    receipt->m_stale = true;
+  } else {
+    // Invalidation precedes Compiling; Ready precedes headingsUpdated. Neither
+    // acknowledges the new source. Only its nonempty native publication does.
+    if (!p_publication || status != vte::VTypstEditor::CompileStatus::Ready)
+      return;
+    const auto &levels =
+        receipt->m_awaitingBefore ? receipt->m_beforeHeadingLevels : receipt->m_afterHeadingLevels;
+    const auto &visible = receipt->m_awaitingBefore ? receipt->m_beforeVisibleHeadings
+                                                    : receipt->m_afterVisibleHeadings;
+    bool matches = !m_typstEditor->getHeadings().isEmpty() && outlineSourceHeadingsCurrent() &&
+                   m_outlineSourceHeadings.size() == receipt->m_trackedHeadingStarts.size() &&
+                   levels.size() == m_outlineSourceHeadings.size() &&
+                   visible.size() == levels.size();
+    for (int i = 0; matches && i < levels.size(); ++i) {
+      const auto &heading = m_outlineSourceHeadings.at(i);
+      matches = heading.m_startPos == receipt->m_trackedHeadingStarts.at(i).position() &&
+                heading.m_level == levels.at(i) && (heading.m_headingIndex >= 0) == visible.at(i);
+    }
+    receipt->m_stale = !matches;
+    if (matches)
+      receipt->m_contentGeneration = m_outlineContentGeneration;
+  }
+  receipt->m_pending = false;
+  m_pendingOutlineSourceEdit.reset();
+  emit outlineSourceChanged();
+}
+
+void TypstViewWindow::reorderOutline(const OutlineMove &p_move) {
+  const auto snapshot = outlineSourceSnapshot();
+  if (snapshot.m_revision < 0)
+    return;
+  OutlineSourceEdit edit;
+  edit.m_kind = OutlineSourceEdit::Kind::Move;
+  edit.m_placement = p_move;
+  edit.m_expectedRevision = snapshot.m_revision;
+  edit.m_expectedFingerprint = snapshot.m_outline->navigationFingerprint();
+  applyOutlineSourceEdit(edit, true);
+}
+
+QSharedPointer<OutlineSourceEditReceipt>
+TypstViewWindow::applyOutlineSourceEdit(const OutlineSourceEdit &p_edit, bool p_focus) {
+  const auto snapshot = outlineSourceSnapshot();
+  if (snapshot.m_revision < 0 || snapshot.m_revision != p_edit.m_expectedRevision ||
+      snapshot.m_outline->navigationFingerprint() != p_edit.m_expectedFingerprint)
+    return {};
+  const auto &placement = p_edit.m_placement;
+  const bool inserting = p_edit.m_kind == OutlineSourceEdit::Kind::Insert;
+  const bool moving = p_edit.m_kind == OutlineSourceEdit::Kind::Move;
+  const auto sourceHeadings = m_outlineSourceHeadings;
+  const int count = m_outlineHeadings.size();
+  if ((!inserting &&
+       (placement.m_sourceHeadingIndex < 0 || placement.m_sourceHeadingIndex >= count)) ||
+      (inserting && placement.m_sourceHeadingIndex != -1) || placement.m_beforeHeadingIndex < -1 ||
+      placement.m_beforeHeadingIndex >= count || placement.m_parentHeadingIndex < -1 ||
+      placement.m_parentHeadingIndex >= count ||
+      ((moving || inserting) && placement.m_targetLevel < 1))
+    return {};
+  if (!moving && !inserting &&
+      m_outlineHeadings.at(placement.m_sourceHeadingIndex).m_title == p_edit.m_topic)
+    return {};
+
+  QVector<OutlineSectionEditor::HeadingBlockInfo> headings;
+  headings.reserve(sourceHeadings.size());
+  int source = -1;
+  int before = -1;
+  int parent = -1;
+  for (int i = 0; i < sourceHeadings.size(); ++i) {
+    const auto &heading = sourceHeadings.at(i);
+    if (heading.m_headingIndex >= 0) {
+      if (heading.m_headingIndex == placement.m_sourceHeadingIndex)
+        source = i;
+      if (heading.m_headingIndex == placement.m_beforeHeadingIndex)
+        before = i;
+      if (heading.m_headingIndex == placement.m_parentHeadingIndex)
+        parent = i;
+    }
+    headings.append({heading.m_level, heading.m_startPos, heading.m_endPos, heading.m_bodyStartPos,
+                     heading.m_bodyEndPos, heading.m_preservedBodyRanges});
+  }
+  const auto sourceParent = [&headings](int p_before, int p_level, int p_skip, int p_skipEnd) {
+    for (int i = p_before - 1; i >= 0; --i) {
+      if (i >= p_skip && i < p_skipEnd)
+        continue;
+      if (headings.at(i).level < p_level)
+        return i;
+    }
+    return -1;
+  };
+  int sourceEnd = source + 1;
+  int levelDelta = 0;
+  const int insertion = before < 0 ? headings.size() : before;
+  if (moving) {
+    const int sourceLevel = headings.at(source).level;
+    while (sourceEnd < headings.size() && headings.at(sourceEnd).level > sourceLevel)
+      ++sourceEnd;
+    int visibleEnd = placement.m_sourceHeadingIndex + 1;
+    while (visibleEnd < count && m_outlineHeadings.at(visibleEnd).m_level > sourceLevel)
+      ++visibleEnd;
+    // Hidden peers terminate sections, even when absent from the panel.
+    for (int i = source + 1; i < sourceHeadings.size(); ++i) {
+      const int visible = sourceHeadings.at(i).m_headingIndex;
+      if (visible >= 0 && (i < sourceEnd) != (visible < visibleEnd))
+        return {};
+    }
+    int visibleParent = placement.m_sourceHeadingIndex - 1;
+    while (visibleParent >= 0 && m_outlineHeadings.at(visibleParent).m_level >= sourceLevel)
+      --visibleParent;
+    const int actualParent = sourceParent(source, sourceLevel, -1, -1);
+    if ((actualParent < 0 ? -1 : sourceHeadings.at(actualParent).m_headingIndex) != visibleParent ||
+        (actualParent >= 0 && sourceHeadings.at(actualParent).m_headingIndex < 0))
+      return {};
+    if ((insertion >= source && insertion < sourceEnd) ||
+        (parent >= source && parent < sourceEnd) ||
+        sourceParent(insertion, placement.m_targetLevel, source, sourceEnd) != parent ||
+        (before >= 0 && headings.at(before).level > placement.m_targetLevel))
+      return {};
+    levelDelta = placement.m_targetLevel - sourceLevel;
+    for (int i = source; i < sourceEnd; ++i) {
+      const qint64 level = qint64(headings.at(i).level) + levelDelta;
+      if (level < 1 || level > INT_MAX)
+        return {};
+    }
+  } else if (inserting && (sourceParent(insertion, placement.m_targetLevel, -1, -1) != parent ||
+                           (before >= 0 && headings.at(before).level > placement.m_targetLevel))) {
+    return {};
+  }
+
+  auto *edit = m_editor->getTextEdit();
+  auto *document = edit->document();
+  const auto cursor = edit->textCursor();
+  const auto &selection = edit->getSelection();
+  int selectionStart = -1;
+  int selectionEnd = -1;
+  if (selection.isValid() &&
+      (!cursor.hasSelection() || cursor.selectionStart() != selection.start() ||
+       cursor.selectionEnd() != selection.end())) {
+    selectionStart = selection.start();
+    selectionEnd = selection.end();
+  }
+  // Prepare the full source-order roster, history closures and marker storage
+  // before the helper opens its single QTextDocument undo group.
+  const auto receipt = QSharedPointer<OutlineSourceEditReceipt>::create();
+  receipt->m_document = document;
+  receipt->m_beforeUndoSteps = document->availableUndoSteps();
+  const int afterCount = int(headings.size()) + (inserting ? 1 : 0);
+  QVector<int> order;
+  order.reserve(afterCount);
+  for (int i = 0; i <= headings.size(); ++i) {
+    if (i == insertion) {
+      if (inserting)
+        order.append(headings.size());
+      else if (moving)
+        for (int j = source; j < sourceEnd; ++j)
+          order.append(j);
+    }
+    if (i < headings.size() && (!moving || i < source || i >= sourceEnd))
+      order.append(i);
+  }
+  receipt->m_beforeHeadingPositions.reserve(headings.size());
+  receipt->m_beforeHeadingLevels.reserve(headings.size());
+  receipt->m_beforeVisibleHeadings.reserve(headings.size());
+  for (const auto &heading : sourceHeadings) {
+    receipt->m_beforeHeadingPositions.append(heading.m_startPos);
+    receipt->m_beforeHeadingLevels.append(heading.m_level);
+    receipt->m_beforeVisibleHeadings.append(heading.m_headingIndex >= 0);
+  }
+  receipt->m_afterHeadingPositions.resize(afterCount);
+  receipt->m_afterHeadingLevels.reserve(afterCount);
+  receipt->m_afterVisibleHeadings.reserve(afterCount);
+  receipt->m_trackedHeadingStarts.reserve(afterCount);
+  for (const int index : order) {
+    const bool added = index == headings.size();
+    receipt->m_afterHeadingLevels.append(
+        added ? placement.m_targetLevel
+              : headings.at(index).level +
+                    (moving && index >= source && index < sourceEnd ? levelDelta : 0));
+    receipt->m_afterVisibleHeadings.append(added || sourceHeadings.at(index).m_headingIndex >= 0);
+    receipt->m_trackedHeadingStarts.append(QTextCursor(document));
+  }
+  const QPointer<TypstViewWindow> guard(this);
+  const auto weak = receipt.toWeakRef();
+  const auto authorization = m_outlineHistoryAuthorization;
+  const auto generation = getBufferGeneration();
+  const auto bufferId = getBuffer().id();
+  const auto activeFile = m_typstEditor->activeFile();
+  receipt->m_undo = [guard, weak, authorization, generation, bufferId, activeFile] {
+    const auto command = weak.toStrongRef();
+    return guard && command &&
+           guard->replayOutlineSourceEdit(command, true, authorization, generation, bufferId,
+                                          activeFile);
+  };
+  receipt->m_redo = [guard, weak, authorization, generation, bufferId, activeFile] {
+    const auto command = weak.toStrongRef();
+    return guard && command &&
+           guard->replayOutlineSourceEdit(command, false, authorization, generation, bufferId,
+                                          activeFile);
+  };
+  if (!outlineSourceWriterCurrent() || !outlineSourceHeadingsCurrent() ||
+      document->revision() != p_edit.m_expectedRevision ||
+      m_outlineProvider->getOutline() != snapshot.m_outline)
+    return {};
+  m_lastKnownRevision = getBuffer().getRevision();
+  getServices().get<BufferService>()->registerActiveWriter(
+      bufferId, reinterpret_cast<quintptr>(this), [this] { return getLatestContent(); });
+  const auto interaction = retainNativeInteraction();
+  m_pendingOutlineSourceEdit = receipt;
+  OutlineSectionEditor::HeadingEditResult result;
+  {
+    m_applyingOutlineSourceEdit = true;
+    const auto applying = qScopeGuard([guard] {
+      if (guard)
+        guard->m_applyingOutlineSourceEdit = false;
+    });
+    if (moving) {
+      const auto moved = OutlineSectionEditor::reorderHeadingBlock(
+          document, headings, source, before, placement.m_targetLevel, cursor.position(),
+          cursor.anchor(), selectionStart, selectionEnd, OutlineSectionEditor::Syntax::Typst,
+          &result.headingPositions);
+      result.changed = moved.moved;
+      result.cursorPosition = moved.cursorPosition;
+      result.cursorAnchor = moved.cursorAnchor;
+      result.selectionStart = moved.selectionStart;
+      result.selectionEnd = moved.selectionEnd;
+    } else if (inserting) {
+      result = OutlineSectionEditor::insertHeading(
+          document, headings, before, parent, placement.m_targetLevel, p_edit.m_topic,
+          cursor.position(), cursor.anchor(), selectionStart, selectionEnd,
+          OutlineSectionEditor::Syntax::Typst);
+    } else {
+      result = OutlineSectionEditor::renameHeading(
+          document, headings, source, p_edit.m_topic, cursor.position(), cursor.anchor(),
+          selectionStart, selectionEnd, OutlineSectionEditor::Syntax::Typst);
+    }
+    if (!guard)
+      return {};
+    if (!result.changed) {
+      m_pendingOutlineSourceEdit.reset();
+      return {};
+    }
+    for (int i = 0; i < order.size(); ++i) {
+      const int position = result.headingPositions.at(order.at(i));
+      receipt->m_afterHeadingPositions[i] = position;
+      receipt->m_trackedHeadingStarts[i].setPosition(position);
+    }
+    receipt->m_afterUndoSteps = document->availableUndoSteps();
+    receipt->m_compilationEpoch = m_typstEditor->compilationEpoch();
+    receipt->m_compilationGeneration = m_typstEditor->compilationGeneration();
+    QTextCursor restored(document);
+    restored.setPosition(result.cursorAnchor);
+    restored.setPosition(result.cursorPosition, QTextCursor::KeepAnchor);
+    edit->setTextCursor(restored);
+    if (result.selectionStart >= 0 && result.selectionEnd > result.selectionStart)
+      edit->setOverriddenSelection(result.selectionStart, result.selectionEnd);
+    if (p_focus)
+      edit->setFocus();
+  }
+  if (!guard)
+    return {};
+  // A synchronous empty invalidation was intentionally deferred. Await the
+  // compiler's later headings publication at the recorded post-write pair.
+  emit outlineSourceChanged();
+  return receipt;
+}
+
+bool TypstViewWindow::replayOutlineSourceEdit(
+    const QSharedPointer<OutlineSourceEditReceipt> &p_receipt, bool p_undo, quint64 p_authorization,
+    quint64 p_generation, const QString &p_bufferId, const QString &p_activeFile) {
+  if (m_applyingOutlineSourceEdit || p_authorization != m_outlineHistoryAuthorization ||
+      p_generation != getBufferGeneration() || p_bufferId != getBuffer().id() || !m_typstEditor ||
+      p_activeFile != m_typstEditor->activeFile() || !p_receipt->m_document ||
+      p_receipt->m_document != m_editor->document() || !outlineSourceWriterCurrent() ||
+      (m_pendingOutlineSourceEdit && m_pendingOutlineSourceEdit != p_receipt))
+    return false;
+  auto *document = p_receipt->m_document.data();
+  if (p_undo ? p_receipt->m_awaitingBefore || !document->isUndoAvailable() ||
+                   document->availableUndoSteps() != p_receipt->m_afterUndoSteps
+             : !p_receipt->m_awaitingBefore || !document->isRedoAvailable() ||
+                   document->availableUndoSteps() != p_receipt->m_beforeUndoSteps ||
+                   document->availableRedoSteps() != p_receipt->m_redoSteps)
+    return false;
+  const auto &positions =
+      p_undo ? p_receipt->m_beforeHeadingPositions : p_receipt->m_afterHeadingPositions;
+  // Capacity was reserved for the larger roster during initial admission.
+  p_receipt->m_trackedHeadingStarts.resize(positions.size());
+  for (auto &marker : p_receipt->m_trackedHeadingStarts)
+    marker = QTextCursor(document);
+  auto *edit = m_editor->getTextEdit();
+  auto cursor = edit->textCursor();
+  QTextCursor selection(document);
+  const auto &overridden = edit->getSelection();
+  const bool hasOverride = overridden.isValid() && (!cursor.hasSelection() ||
+                                                    overridden.start() != cursor.selectionStart() ||
+                                                    overridden.end() != cursor.selectionEnd());
+  if (hasOverride) {
+    selection.setPosition(overridden.start());
+    selection.setPosition(overridden.end(), QTextCursor::KeepAnchor);
+  }
+  const int scroll = edit->verticalScrollBar()->value();
+  m_lastKnownRevision = getBuffer().getRevision();
+  getServices().get<BufferService>()->registerActiveWriter(
+      p_bufferId, reinterpret_cast<quintptr>(this), [this] { return getLatestContent(); });
+  p_receipt->m_awaitingBefore = p_undo;
+  p_receipt->m_pending = true;
+  p_receipt->m_stale = false;
+  const QPointer<TypstViewWindow> guard(this);
+  const auto interaction = retainNativeInteraction();
+  m_pendingOutlineSourceEdit = p_receipt;
+  {
+    m_applyingOutlineSourceEdit = true;
+    const auto applying = qScopeGuard([guard] {
+      if (guard)
+        guard->m_applyingOutlineSourceEdit = false;
+    });
+    if (p_undo)
+      document->undo();
+    else
+      document->redo();
+    if (!guard)
+      return false;
+    for (int i = 0; i < positions.size(); ++i)
+      p_receipt->m_trackedHeadingStarts[i].setPosition(positions.at(i));
+    p_receipt->m_redoSteps = document->availableRedoSteps();
+    p_receipt->m_compilationEpoch = m_typstEditor->compilationEpoch();
+    p_receipt->m_compilationGeneration = m_typstEditor->compilationGeneration();
+    edit->setTextCursor(cursor);
+    if (hasOverride && selection.hasSelection())
+      edit->setOverriddenSelection(selection.selectionStart(), selection.selectionEnd());
+    edit->verticalScrollBar()->setValue(scroll);
+  }
+  if (!guard)
+    return false;
+  emit outlineSourceChanged();
+  return true;
 }
 
 bool TypstViewWindow::isActiveFileHeading(const vte::TypstHeadingInfo &p_heading) const {
@@ -1946,51 +2460,56 @@ bool TypstViewWindow::isActiveFileHeading(const vte::TypstHeadingInfo &p_heading
   return validBoundary(p_heading.m_startPos) && validBoundary(p_heading.m_endPos);
 }
 
-void TypstViewWindow::navigateToHeading(int p_index) {
+bool TypstViewWindow::navigateToHeading(int p_index, bool p_focus) {
   if (!m_sourceAvailable || !isEnabled() || p_index < 0 || p_index >= m_outlineHeadings.size()) {
-    return;
+    return false;
   }
   // Both mode changes and opening another buffer can synchronously invalidate the outline.
   const auto target = m_outlineHeadings.at(p_index);
   if (target.m_file != m_typstEditor->activeFile()) {
     if (target.m_startPos < 0 || target.m_endPos < target.m_startPos) {
       showMessage(tr("Unable to open the Typst source location"));
-      return;
+      return false;
     }
-    m_controller->requestOpenSource(target.m_file, target.m_endPos, target.m_endPos);
-    return;
+    m_controller->requestOpenSource(target.m_file, target.m_endPos, target.m_endPos, p_focus);
+    return true;
   }
   if (!isActiveFileHeading(target)) {
     showMessage(tr("Unable to open the Typst source location"));
-    return;
+    return false;
   }
 
   const QPointer<TypstViewWindow> guard(this);
-  const auto outline = m_outlineProvider->getOutline();
+  // Revealing Edit mode republishes permission metadata, but does not replace
+  // the compiler's heading snapshot. Guard that source identity, not the wrapper.
+  const auto headings = m_outlineHeadings;
   const auto generation = getBufferGeneration();
-  const auto isCurrent = [&guard, &outline, generation]() {
+  const auto isCurrent = [&guard, &headings, generation]() {
     return guard && guard->getBufferGeneration() == generation && guard->m_sourceAvailable &&
-           guard->isEnabled() && guard->m_outlineProvider->getOutline() == outline;
+           guard->isEnabled() && guard->m_outlineHeadings.constData() == headings.constData();
   };
   revealSource();
   if (!isCurrent() || !isActiveFileHeading(target)) {
-    return;
+    return false;
   }
   auto *textEdit = m_editor->getTextEdit();
   QTextCursor cursor(textEdit->document());
   cursor.setPosition(target.m_endPos);
   textEdit->setTextCursor(cursor);
   if (!isCurrent()) {
-    return;
+    return false;
   }
   textEdit->ensureCursorVisible();
   if (!isCurrent()) {
-    return;
+    return false;
   }
-  textEdit->setFocus();
+  if (p_focus) {
+    textEdit->setFocus();
+  }
   if (isCurrent()) {
     m_outlineProvider->setCurrentHeadingIndex(p_index);
   }
+  return true;
 }
 
 void TypstViewWindow::updateCurrentHeading() {

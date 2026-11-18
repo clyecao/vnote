@@ -111,9 +111,7 @@ QString runtimeHtml(const QColor &p_color, const QString &p_mathJaxScript,
           QStringLiteral("window.vxOptions = %1;")
               .arg(QString::fromUtf8(QJsonDocument(options).toJson(QJsonDocument::Compact))));
   html.replace(QStringLiteral("/* VX_GLOBAL_STYLES_PLACEHOLDER */"),
-               QStringLiteral("#vx-content {font:18px Arial;color:%1;}"
-                              "#vx-inplace-preview {position:absolute;left:-100000px;top:0;}")
-                   .arg(p_color.name()));
+               QStringLiteral("#vx-content {font:18px Arial;color:%1;}").arg(p_color.name()));
   QString tags;
   if (p_protected) {
     // Production protected templates preload CSS; their math worker never uses CSS XHR.
@@ -530,9 +528,15 @@ class TestMarkdownWebJobs : public QObject {
 private slots:
   void initTestCase();
   void htmlCodeBlocks();
+  void htmlHeadings();
   void htmlMath();
+  void htmlMathRoundTrip();
+  void htmlMathUnderOver();
+  void htmlMathTokenRecovery();
+  void htmlMathUnsupportedTokens();
   void allOperations_data();
   void allOperations();
+  void previewWorkspaceDoesNotAffectReader();
   void graphAlgorithms_data();
   void graphAlgorithms();
   void rasterGeometry_data();
@@ -1047,7 +1051,56 @@ void TestMarkdownWebJobs::htmlCodeBlocks() {
   }
 }
 
+void TestMarkdownWebJobs::htmlHeadings() {
+  struct Case {
+    const char *name;
+    QString html;
+    QString markdown;
+  };
+  const Case cases[] = {
+      {"numbered-h1", QStringLiteral("<h1>1. Heading</h1>"), QStringLiteral("# 1. Heading")},
+      {"numbered-h6", QStringLiteral("<h6>12. Heading</h6>"), QStringLiteral("###### 12. Heading")},
+      {"inline-formatting",
+       QStringLiteral("<h2>2. <em>Emphasis</em> and <code>1. code</code></h2>"),
+       QStringLiteral("## 2. *Emphasis* and `1. code`")},
+      {"literal-backslash", QStringLiteral(R"(<h2>1\. Literal backslash</h2>)"),
+       QStringLiteral(R"(## 1\\. Literal backslash)")},
+      {"code-heading", QStringLiteral(R"(<h2><code>1\. Literal code</code></h2>)"),
+       QStringLiteral(R"(## `1\. Literal code`)")},
+      {"paragraph-is-not-a-list", QStringLiteral("<p>1. Literal paragraph</p>"),
+       QStringLiteral(R"(1\. Literal paragraph)")},
+      {"subsequent-line-is-not-a-list", QStringLiteral("<h2>1. First<br>2. Second</h2>"),
+       QStringLiteral("## 1. First  \n2\\. Second")}};
+  Runtime runtime(true);
+  QObject owner;
+  for (const auto &entry : cases) {
+    const auto job = submit(runtime.session, QStringLiteral("markdown.htmlToMarkdown"),
+                            source(entry.html), &owner);
+    QTRY_VERIFY_WITH_TIMEOUT(job->finished, 10000);
+    QVERIFY2(job->result.status == WebViewJobResult::Status::Success, entry.name);
+    QVERIFY2(job->result.value.toString() == entry.markdown,
+             qPrintable(QStringLiteral("%1\nExpected: %2\nActual: %3")
+                            .arg(QString::fromUtf8(entry.name), entry.markdown,
+                                 job->result.value.toString())));
+  }
+}
+
 void TestMarkdownWebJobs::htmlMath() {
+  // Browser copy omits the TeX annotations present in the page's outerHTML.
+  QFile clipboardFile(QFINDTESTDATA("../data/katex-clipboard.html"));
+  QVERIFY(clipboardFile.open(QIODevice::ReadOnly));
+  const auto clipboardHtml = QString::fromUtf8(clipboardFile.readAll());
+  const QString clipboardMarkdown = QStringLiteral(
+      "## 1. 这条公式对正整数指数为什么成立\n\n"
+      "当 $m,n$ 是正整数时：\n\n"
+      "$$\na^{m+n}=\\underbrace{a\\cdot a\\cdots a}_{m+n\\text{ 个}}\n$$\n\n"
+      "而\n\n"
+      "$$\na^{m}\\cdot a^{n}=\\underbrace{a\\cdots a}_{m\\text{ 个}}"
+      "\\cdot \\underbrace{a\\cdots a}_{n\\text{ 个}}\n$$\n\n"
+      "两者都是 $m+n$ 个 $a$ 相乘，所以相等。这是指数运算最基本的性质，也叫**指数律**。");
+  const auto presentation = [](const QString &body) {
+    return QStringLiteral("<math><semantics>%1</semantics></math>").arg(body);
+  };
   const auto math = [](const QString &tex, const QString &display = QString()) {
     return QStringLiteral("<math xmlns=\"http://www.w3.org/1998/Math/MathML\"%1><semantics>"
                           "<mrow><mi>x</mi></mrow><annotation encoding=\"application/x-tex\">"
@@ -1071,6 +1124,125 @@ void TestMarkdownWebJobs::htmlMath() {
     QString markdown;
   };
   const Case cases[] = {
+      {"browser-clipboard-without-annotations", clipboardHtml, clipboardMarkdown},
+      {"normal-single-letter-identifier",
+       presentation(QStringLiteral("<mrow><mi mathvariant=\"normal\">x</mi><mi>x</mi></mrow>")),
+       QStringLiteral(R"($\mathrm{x}x$)")},
+      {"applied-custom-and-standard-functions",
+       presentation(QStringLiteral("<mrow><mi>foo</mi><mo>⁡</mo><mi>x</mi><mo>+</mo>"
+                                   "<mi>sin</mi><mo>⁡</mo><mi>x</mi></mrow>")),
+       QStringLiteral(R"($\operatorname{foo}x+\sin x$)")},
+      {"scripted-limit-operator",
+       presentation(QStringLiteral("<msubsup><mrow><mi>lim</mi><mo>⁡</mo></mrow>"
+                                   "<mi>x</mi><mi>y</mi></msubsup>")),
+       QStringLiteral(R"($\lim _{x}^{y}$)")},
+      {"case-sensitive-probability-operator",
+       presentation(QStringLiteral("<mrow><mi>Pr</mi><mo>⁡</mo><mi>x</mi><mo>+</mo>"
+                                   "<mi>pr</mi><mo>⁡</mo><mi>x</mi></mrow>")),
+       QStringLiteral(R"($\Pr x+\operatorname{pr}x$)")},
+      {"fractional-em-spacing",
+       presentation(QStringLiteral("<mrow><mi>x</mi><mspace width=\"0.5em\"/>"
+                                   "<mi>y</mi></mrow>")),
+       QStringLiteral(R"($x\hspace{0.5em}y$)")},
+      {"unsupported-function-variant",
+       presentation(QStringLiteral("<mrow><mi mathvariant=\"bold\">sin</mi><mo>⁡</mo>"
+                                   "<mi>x</mi></mrow>")),
+       QStringLiteral("sin⁡x")},
+      {"standalone-application-marker", presentation(QStringLiteral("<mo>⁡</mo>")),
+       QStringLiteral("⁡")},
+      {"application-after-non-identifier",
+       presentation(QStringLiteral("<mrow><mn>2</mn><mo>⁡</mo><mi>x</mi></mrow>")),
+       QStringLiteral("2⁡x")},
+      {"unsupported-space-unit",
+       presentation(QStringLiteral("<mrow><mi>x</mi><mspace width=\"2px\"/>"
+                                   "<mi>y</mi></mrow>")),
+       QStringLiteral("xy")},
+      {"malformed-space-width",
+       presentation(QStringLiteral("<mrow><mi>x</mi><mspace width=\"2em}x{\"/>"
+                                   "<mi>y</mi></mrow>")),
+       QStringLiteral("xy")},
+      {"space-with-height",
+       presentation(QStringLiteral("<mrow><mi>x</mi><mspace width=\"2em\" height=\"1em\"/>"
+                                   "<mi>y</mi></mrow>")),
+       QStringLiteral("xy")},
+      {"presentation-formatting-whitespace",
+       presentation(QStringLiteral("\n<mrow>\n<mi>m</mi><!-- layout -->\n<mo>+</mo>\n"
+                                   "<mi>n</mi>\n</mrow>\n")),
+       QStringLiteral("$m+n$")},
+      {"presentation-with-non-tex-metadata",
+       presentation(
+           QStringLiteral("<mi>x</mi><annotation encoding=\"text/plain\">metadata</annotation>"
+                          "<annotation-xml encoding=\"application/xml\"><data>metadata</data>"
+                          "</annotation-xml>")),
+       QStringLiteral("$x$")},
+      {"annotation-precedes-presentation", math(QStringLiteral("original")),
+       QStringLiteral("$original$")},
+      {"fraction-and-square-root",
+       presentation(QStringLiteral("<mfrac><mi>x</mi><msqrt><mi>y</mi><mo>+</mo><mn>1</mn>"
+                                   "</msqrt></mfrac>")),
+       QStringLiteral(R"($\frac{x}{\sqrt{y+1}}$)")},
+      {"indexed-root", presentation(QStringLiteral("<mroot><mi>x</mi><mn>3</mn></mroot>")),
+       QStringLiteral(R"($\sqrt[{3}]{x}$)")},
+      {"multi-digit-script-base",
+       presentation(QStringLiteral("<msup><mn>10</mn><mi>n</mi></msup>")),
+       QStringLiteral("${10}^{n}$")},
+      {"decimal-script-base", presentation(QStringLiteral("<msub><mn>1.2</mn><mi>n</mi></msub>")),
+       QStringLiteral("${1.2}_{n}$")},
+      {"decimal-combined-script-base",
+       presentation(QStringLiteral("<msubsup><mn>.5</mn><mi>n</mi><mn>2</mn></msubsup>")),
+       QStringLiteral("${.5}_{n}^{2}$")},
+      {"compound-script-base",
+       presentation(QStringLiteral("<msup><mrow><mi>a</mi><mo>+</mo><mi>b</mi></mrow>"
+                                   "<mi>n</mi></msup>")),
+       QStringLiteral("${a+b}^{n}$")},
+      {"nested-script-base",
+       presentation(QStringLiteral("<msup><msup><mi>a</mi><mi>b</mi></msup>"
+                                   "<mi>c</mi></msup>")),
+       QStringLiteral("${a^{b}}^{c}$")},
+      {"root-index-containing-bracket",
+       presentation(QStringLiteral("<mroot><mi>x</mi><mrow><mo>[</mo><mi>n</mi><mo>]</mo>"
+                                   "</mrow></mroot>")),
+       QStringLiteral(R"($\sqrt[{[n]}]{x}$)")},
+      {"combined-scripts",
+       presentation(QStringLiteral("<msubsup><mi>a</mi><mi>i</mi><mn>2</mn></msubsup>")),
+       QStringLiteral("$a_{i}^{2}$")},
+      {"subscript", presentation(QStringLiteral("<msub><mi>a</mi><mi>i</mi></msub>")),
+       QStringLiteral("$a_{i}$")},
+      {"overscript-and-underscript",
+       presentation(QStringLiteral("<mrow><mover><mi>x</mi><mi>a</mi></mover>"
+                                   "<munder><mi>y</mi><mi>b</mi></munder></mrow>")),
+       QStringLiteral(R"($\overset{a}{x}\underset{b}{y}$)")},
+      {"labelled-overbrace",
+       presentation(QStringLiteral("<mover><mover><mi>x</mi><mo>⏞</mo></mover>"
+                                   "<mi>n</mi></mover>")),
+       QStringLiteral(R"($\overbrace{x}^{n}$)")},
+      {"literal-text-escaping",
+       presentation(QStringLiteral("<mtext>&nbsp;个\n&amp;_#$%{}\\^~</mtext>")),
+       QStringLiteral(
+           R"($\text{ 个 \&\_\#\$\%\{\}\textbackslash{}\textasciicircum{}\textasciitilde{}}$)")},
+      {"unsupported-presentation-is-not-partially-recovered",
+       presentation(QStringLiteral("<mrow><msup><mi>a</mi><mn>2</mn></msup>"
+                                   "<menclose><mi>b</mi></menclose></mrow>")),
+       QStringLiteral("a2b")},
+      {"unknown-operator-is-not-guessed",
+       presentation(QStringLiteral("<mrow><mi>x</mi><mo>?</mo></mrow>")), QStringLiteral("x?")},
+      {"malformed-script-is-not-partially-recovered",
+       presentation(QStringLiteral("<msup><mi>a</mi><mi>b</mi><mi>c</mi></msup>")),
+       QStringLiteral("abc")},
+      {"missing-under-over-child",
+       presentation(QStringLiteral("<munderover><mi>x</mi><mi>l</mi></munderover>")),
+       QStringLiteral("xl")},
+      {"extra-under-over-child",
+       presentation(QStringLiteral("<munderover><mi>x</mi><mi>l</mi><mi>u</mi><mi>z</mi>"
+                                   "</munderover>")),
+       QStringLiteral("xluz")},
+      {"unsupported-under-over-child",
+       presentation(
+           QStringLiteral("<mrow><mi>y</mi><munderover><mo>∑</mo>"
+                          "<menclose><mi>l</mi></menclose><mi>u</mi></munderover></mrow>")),
+       QStringLiteral("y∑lu")},
+      {"multiple-semantics-presentations-are-not-guessed",
+       presentation(QStringLiteral("<mi>x</mi><mi>y</mi>")), QStringLiteral("xy")},
       {"reported-katex-display",
        QStringLiteral("<span class=\"katex-display ds-markdown-math\">%1</span>")
            .arg(katex(math(formula, QStringLiteral("block")))),
@@ -1105,8 +1277,8 @@ void TestMarkdownWebJobs::htmlMath() {
       {"class-substring-is-not-shell",
        QStringLiteral("<span class=\"not-katex\">%1 Keep text</span>").arg(x),
        QStringLiteral("$x$ Keep text")},
-      {"unannotated-math", QStringLiteral("<math><mi>x</mi></math>"), QStringLiteral("x")},
-      {"empty-tex-annotation", math(QStringLiteral(" \n ")), QStringLiteral("x")},
+      {"unannotated-math", QStringLiteral("<math><mi>x</mi></math>"), QStringLiteral("$x$")},
+      {"empty-tex-annotation", math(QStringLiteral(" \n ")), QStringLiteral("$x$")},
       {"encoding-case-insensitive",
        QStringLiteral("<math><semantics><annotation encoding=\" Application/X-TeX \">"
                       "x</annotation></semantics></math>"),
@@ -1137,6 +1309,250 @@ void TestMarkdownWebJobs::htmlMath() {
                             .arg(QString::fromUtf8(entry.name), entry.markdown,
                                  job->result.value.toString())));
   }
+}
+
+void TestMarkdownWebJobs::htmlMathRoundTrip() {
+  QFile clipboardFile(QFINDTESTDATA("../data/katex-sinc-clipboard.html"));
+  QVERIFY(clipboardFile.open(QIODevice::ReadOnly));
+  struct Case {
+    QString html;
+    int inlineCount;
+    int displayCount;
+    QString lastFormula;
+    QString text;
+  };
+  const Case cases[] = {
+      // Includes the reported zeros formula ending in an unannotated ellipsis.
+      {QString::fromUtf8(clipboardFile.readAll()), 2, 2, QStringLiteral("x=kπ, k=±1,±2,…"),
+       QString()},
+      // Command separators and spaces inside text must survive boundary trimming.
+      {QStringLiteral("Before <math><mrow><mi>sin</mi><mo>⁡</mo><mi>x</mi><mo>→</mo>"
+                      "<mi>x</mi><mtext> padded </mtext></mrow></math> after."),
+       1, 0, QStringLiteral("sin⁡x→x padded "), QStringLiteral(" padded ")}};
+  Runtime runtime(true);
+  QObject owner;
+  QSignalSpy rendered(runtime.adapter, &MarkdownViewerAdapter::workFinished);
+  for (const auto &entry : cases) {
+    const auto job = submit(runtime.session, QStringLiteral("markdown.htmlToMarkdown"),
+                            source(entry.html), &owner);
+    QTRY_VERIFY_WITH_TIMEOUT(job->finished, 10000);
+    QCOMPARE(job->result.status, WebViewJobResult::Status::Success);
+    rendered.clear();
+    const auto document = runtime.renderDocument(job->result.value.toString());
+    QVERIFY2(document.error.isEmpty(), qPrintable(document.error));
+    QTRY_COMPARE_WITH_TIMEOUT(rendered.count(), 1, 30000);
+    const auto result = evaluateObject(runtime.page, QStringLiteral(R"JS((() => {
+      const root = vxcore.contentContainer;
+      const formulas = Array.from(root.querySelectorAll('.katex-mathml math'));
+      const last = formulas.at(-1)?.querySelector('semantics > :first-child');
+      const prose = root.cloneNode(true);
+      prose.querySelectorAll('.tex-to-render').forEach(node => node.remove());
+      return {
+        inlineCount: root.querySelectorAll('eq .katex').length,
+        displayCount: root.querySelectorAll('.katex-display').length,
+        errors: root.querySelectorAll('.katex-error').length,
+        lastFormula: last?.textContent.replace(/\u00a0/g, ' '),
+        text: last?.querySelector('mtext')?.textContent.replace(/\u00a0/g, ' '),
+        prose: prose.textContent
+      };
+    })())JS"));
+    QCOMPARE(result.value(QStringLiteral("inlineCount")).toInt(), entry.inlineCount);
+    QCOMPARE(result.value(QStringLiteral("displayCount")).toInt(), entry.displayCount);
+    QCOMPARE(result.value(QStringLiteral("errors")).toInt(), 0);
+    QCOMPARE(result.value(QStringLiteral("lastFormula")).toString(), entry.lastFormula);
+    const auto prose = result.value(QStringLiteral("prose")).toString();
+    QVERIFY2(!prose.contains(QLatin1Char('$')), qPrintable(prose));
+    if (entry.text.isEmpty()) {
+      QVERIFY(prose.contains(QStringLiteral("零点在 。")));
+    } else {
+      QCOMPARE(prose, QStringLiteral("Before  after.\n"));
+      QCOMPARE(result.value(QStringLiteral("text")).toString(), entry.text);
+    }
+  }
+}
+
+void TestMarkdownWebJobs::htmlMathUnderOver() {
+  QFile clipboardFile(QFINDTESTDATA("../data/katex-sampling-clipboard.html"));
+  QVERIFY(clipboardFile.open(QIODevice::ReadOnly));
+  struct Case {
+    QString html;
+    QString formula;
+    QString base;
+    QString lower;
+    QString upper;
+    QString prose;
+    bool display;
+  };
+  const Case cases[] = {
+      {QString::fromUtf8(clipboardFile.readAll()),
+       QStringLiteral("x(t)=∑n=−∞∞x(nT)sinc⁡(t−nTT)"), QStringLiteral("∑"),
+       QStringLiteral("n=−∞"), QStringLiteral("∞"),
+       QStringLiteral("② 采样与信号重建\n\n"
+                      "香农采样定理中，带限信号可以用 sinc 插值重建：\n\n"
+                      "这是理想插值/理想重构的核心。实际系统常用升余弦、样条等近似，"
+                      "因为理想 sinc 不可实现。"),
+       true},
+      {QStringLiteral("<p>Before <math><munderover><mrow><mi>a</mi><mo>+</mo><mi>b</mi>"
+                      "</mrow><mi>l</mi><mi>u</mi></munderover></math> after.</p>"),
+       QStringLiteral("a+blu"), QStringLiteral("a+b"), QStringLiteral("l"), QStringLiteral("u"),
+       QStringLiteral("Before  after."), false}};
+  Runtime runtime(true);
+  QObject owner;
+  QSignalSpy rendered(runtime.adapter, &MarkdownViewerAdapter::workFinished);
+  for (const auto &entry : cases) {
+    const auto job = submit(runtime.session, QStringLiteral("markdown.htmlToMarkdown"),
+                            source(entry.html), &owner);
+    QTRY_VERIFY_WITH_TIMEOUT(job->finished, 10000);
+    QCOMPARE(job->result.status, WebViewJobResult::Status::Success);
+    rendered.clear();
+    const auto document = runtime.renderDocument(job->result.value.toString());
+    QVERIFY2(document.error.isEmpty(), qPrintable(document.error));
+    QTRY_COMPARE_WITH_TIMEOUT(rendered.count(), 1, 30000);
+    const auto result = evaluateObject(runtime.page, QStringLiteral(R"JS((() => {
+      const root = vxcore.contentContainer;
+      const formulas = Array.from(root.querySelectorAll('.katex-mathml semantics'));
+      const lower = root.querySelector('.katex-mathml munder');
+      const upper = root.querySelector('.katex-mathml mover');
+      const fraction = root.querySelector('.katex-mathml mfrac');
+      const prose = root.cloneNode(true);
+      prose.querySelectorAll('.tex-to-render').forEach(node => node.remove());
+      return {
+        formulas: formulas.map(node => node.firstElementChild.textContent),
+        base: lower?.children[0]?.textContent,
+        lower: lower?.children[1]?.textContent,
+        upper: upper?.children[1]?.textContent,
+        fraction: fraction ? Array.from(fraction.children, node => node.textContent) : [],
+        inlineCount: root.querySelectorAll('eq .katex').length,
+        displayCount: root.querySelectorAll('.katex-display').length,
+        errors: root.querySelectorAll('.katex-error').length,
+        prose: prose.textContent.trim().replace(/\n+/g, '\n\n')
+      };
+    })())JS"));
+    QCOMPARE(result.value(QStringLiteral("formulas")).toArray(), QJsonArray{entry.formula});
+    QCOMPARE(result.value(QStringLiteral("base")).toString(), entry.base);
+    QCOMPARE(result.value(QStringLiteral("lower")).toString(), entry.lower);
+    QCOMPARE(result.value(QStringLiteral("upper")).toString(), entry.upper);
+    QCOMPARE(result.value(QStringLiteral("inlineCount")).toInt(), entry.display ? 0 : 1);
+    QCOMPARE(result.value(QStringLiteral("displayCount")).toInt(), entry.display ? 1 : 0);
+    QCOMPARE(result.value(QStringLiteral("errors")).toInt(), 0);
+    QCOMPARE(result.value(QStringLiteral("prose")).toString(), entry.prose);
+    if (entry.display) {
+      QCOMPARE(result.value(QStringLiteral("fraction")).toArray(), QJsonArray({"t−nT", "T"}));
+    }
+  }
+}
+
+void TestMarkdownWebJobs::htmlMathTokenRecovery() {
+  QFile clipboardFile(QFINDTESTDATA("../data/katex-properties-clipboard.html"));
+  QVERIFY(clipboardFile.open(QIODevice::ReadOnly));
+  const QStringList sources = {
+      QString::fromUtf8(clipboardFile.readAll()),
+      QStringLiteral(
+          "<p>Symbols <math><mrow><mi>a</mi><mo>∈</mo><mi>b</mi><mo>⇒</mo><mi>c</mi>"
+          "</mrow></math> and <math><mrow><mi>∣</mi><mi>x</mi><mi>∣</mi><mo>∣</mo><mi>y</mi>"
+          "</mrow></math>, braces <math><mrow><mi>{</mi><mi>x</mi><mi>}</mi></mrow></math>.</p>"
+          "<p>Fonts <math><mrow><mi mathvariant=normal>N</mi><mi mathvariant=italic>I</mi>"
+          "<mi mathvariant=bold>B</mi><mi mathvariant=bold-italic>V</mi>"
+          "<mi mathvariant=script>F</mi><mi mathvariant=fraktur>G</mi>"
+          "<mi mathvariant=double-struck>R</mi><mi mathvariant=sans-serif>S</mi>"
+          "<mi mathvariant=monospace>T</mi></mrow></math>.</p>")};
+  Runtime runtime(true);
+  QObject owner;
+  QSignalSpy rendered(runtime.adapter, &MarkdownViewerAdapter::workFinished);
+  const auto properties = QStringLiteral(R"JS(root => {
+    const formulas = Array.from(root.querySelectorAll('math'));
+    const contents = node => (node.querySelector('semantics > :first-child') || node).textContent;
+    const parts = selector => Array.from(root.querySelectorAll(selector),
+      node => Array.from(node.children, contents));
+    const prose = root.cloneNode(true);
+    prose.querySelectorAll('.tex-to-render, .katex, math').forEach(node => node.remove());
+    return {formulas:formulas.map(contents), scripts:parts('msubsup'), fractions:parts('mfrac'),
+      prose:prose.textContent.replace(/\s+/g, ''), listItems:prose.querySelectorAll('li').length};
+  })JS");
+  for (int i = 0; i < sources.size(); ++i) {
+    const auto &html = sources.at(i);
+    const auto encoded =
+        QString::fromUtf8(QJsonDocument(source(html)).toJson(QJsonDocument::Compact));
+    const auto expected = evaluateObject(runtime.page, QStringLiteral(R"JS((() => {
+      const root = document.implementation.createHTMLDocument('').body;
+      root.innerHTML = (%1).source;
+      return (%2)(root);
+    })())JS")
+                                                           .arg(encoded, properties));
+    const auto job =
+        submit(runtime.session, QStringLiteral("markdown.htmlToMarkdown"), source(html), &owner);
+    QTRY_VERIFY_WITH_TIMEOUT(job->finished, 10000);
+    QCOMPARE(job->result.status, WebViewJobResult::Status::Success);
+    rendered.clear();
+    const auto document = runtime.renderDocument(job->result.value.toString());
+    QVERIFY2(document.error.isEmpty(), qPrintable(document.error));
+    QTRY_COMPARE_WITH_TIMEOUT(rendered.count(), 1, 30000);
+    const auto actual = evaluateObject(
+        runtime.page, QStringLiteral("(%1)(vxcore.contentContainer)").arg(properties));
+    QCOMPARE(actual, expected);
+    const auto appearance = evaluateObject(runtime.page, QStringLiteral(R"JS((() => {
+      const root = vxcore.contentContainer;
+      const atoms = Array.from(root.querySelectorAll('.katex-html .base'))
+        .flatMap(base => Array.from(base.children));
+      const fonts = Object.fromEntries(['mathrm','mathit','mathbf','boldsymbol','mathcal',
+        'mathfrak','mathbb','mathsf','mathtt'].map(name => [name,
+        root.querySelector('.katex-html .' + name)?.textContent]));
+      return {inline:root.querySelectorAll('eq .katex').length,
+        display:root.querySelectorAll('.katex-display').length,
+        errors:root.querySelectorAll('.katex-error').length, fonts,
+        barRoles:atoms.filter(node => node.textContent === '∣')
+          .map(node => node.classList.contains('mord') ? 'ordinary' : 'relation')};
+    })())JS"));
+    QCOMPARE(appearance.value(QStringLiteral("inline")).toInt(), i == 0 ? 7 : 4);
+    QCOMPARE(appearance.value(QStringLiteral("display")).toInt(), i == 0 ? 1 : 0);
+    QCOMPARE(appearance.value(QStringLiteral("errors")).toInt(), 0);
+    const auto fonts = appearance.value(QStringLiteral("fonts")).toObject();
+    QCOMPARE(fonts.value(QStringLiteral("mathcal")).toString(), QStringLiteral("F"));
+    const auto roles = appearance.value(QStringLiteral("barRoles")).toArray();
+    if (i == 0) {
+      QCOMPARE(roles, QJsonArray({"ordinary", "ordinary", "ordinary", "ordinary"}));
+    } else {
+      QCOMPARE(roles, QJsonArray({"ordinary", "ordinary", "relation"}));
+      const QJsonObject expectedFonts{{"mathrm", "N"},     {"mathit", "I"},  {"mathbf", "B"},
+                                      {"boldsymbol", "V"}, {"mathcal", "F"}, {"mathfrak", "G"},
+                                      {"mathbb", "R"},     {"mathsf", "S"},  {"mathtt", "T"}};
+      QCOMPARE(fonts, expectedFonts);
+    }
+  }
+}
+
+void TestMarkdownWebJobs::htmlMathUnsupportedTokens() {
+  QString html, expectedText;
+  for (const auto &tag : {QStringLiteral("mi"), QStringLiteral("mo")}) {
+    for (const auto &token : {QStringLiteral("~"), QStringLiteral("$"), QStringLiteral("\\"),
+                              QStringLiteral("^"), QStringLiteral("_")}) {
+      html += QStringLiteral("<p>x<math><%1>%2</%1></math>y</p>").arg(tag, token);
+      expectedText += QStringLiteral("x%1y\n").arg(token);
+    }
+  }
+  for (const auto &identifier : {QStringLiteral("f"), QStringLiteral("π")}) {
+    html += QStringLiteral("<p>x<math><mi mathvariant=script>%1</mi></math>y</p>").arg(identifier);
+    expectedText += QStringLiteral("x%1y\n").arg(identifier);
+  }
+  Runtime runtime(true);
+  QObject owner;
+  QSignalSpy rendered(runtime.adapter, &MarkdownViewerAdapter::workFinished);
+  const auto job =
+      submit(runtime.session, QStringLiteral("markdown.htmlToMarkdown"), source(html), &owner);
+  QTRY_VERIFY_WITH_TIMEOUT(job->finished, 10000);
+  QCOMPARE(job->result.status, WebViewJobResult::Status::Success);
+  const auto document = runtime.renderDocument(job->result.value.toString());
+  QVERIFY2(document.error.isEmpty(), qPrintable(document.error));
+  QTRY_COMPARE_WITH_TIMEOUT(rendered.count(), 1, 30000);
+  QCOMPARE(evaluate(runtime.page, QStringLiteral("vxcore.contentContainer.textContent")).toString(),
+           expectedText);
+  QCOMPARE(
+      evaluate(
+          runtime.page,
+          QStringLiteral(
+              "vxcore.contentContainer.querySelectorAll('.tex-to-render, .katex-error').length"))
+          .toInt(),
+      0);
 }
 
 void TestMarkdownWebJobs::allOperations_data() {
@@ -1254,6 +1670,60 @@ void TestMarkdownWebJobs::allOperations() {
   QCOMPARE(evaluate(runtime.page, QStringLiteral("vxcore.documentGeneration")).toString(),
            generation);
   QCOMPARE(rendered.count(), 1);
+}
+
+void TestMarkdownWebJobs::previewWorkspaceDoesNotAffectReader() {
+  Runtime runtime(false);
+  QObject owner;
+  QSignalSpy rendered(runtime.adapter, &MarkdownViewerAdapter::workFinished);
+  const auto document = runtime.renderDocument(QStringLiteral("# Reader\n\nVisible note content."));
+  QVERIFY2(document.error.isEmpty(), qPrintable(document.error));
+  QTRY_COMPARE_WITH_TIMEOUT(rendered.count(), 1, 30000);
+  QVERIFY(evaluate(runtime.page, QStringLiteral(R"JS((() => {
+    const root = document.getElementById('vx-inplace-preview');
+    const reader = document.getElementById('vx-content');
+    const scrollSize = () => [document.documentElement.scrollWidth,
+                              document.documentElement.scrollHeight].join(',');
+    const readerRect = () => JSON.stringify(reader.getBoundingClientRect());
+    const initialScroll = scrollSize(), initialReader = readerRect();
+    window.previewIsolation = {laidOut:false, scrollStable:true, readerStable:true, hit:false};
+    window.previewObserver = new MutationObserver(() => {
+      const state = window.previewIsolation;
+      for (const job of root.children) {
+        const rect = job.getBoundingClientRect();
+        if (rect.width >= 2000 && rect.height > 0) state.laidOut = true;
+        state.scrollStable &&= scrollSize() === initialScroll;
+        state.readerStable &&= readerRect() === initialReader;
+        const x = Math.max(0, Math.min(innerWidth - 1, rect.x + rect.width / 2));
+        const y = Math.max(0, Math.min(innerHeight - 1, rect.y + rect.height / 2));
+        state.hit ||= root.contains(document.elementFromPoint(x, y));
+      }
+    });
+    previewObserver.observe(root, {childList:true, subtree:true, attributes:true});
+    return true;
+  })())JS"))
+              .toBool());
+
+  for (const auto &operation :
+       {QStringLiteral("markdown.previewMath"), QStringLiteral("markdown.previewGraph")}) {
+    evaluate(runtime.page, QStringLiteral("previewIsolation.laidOut = false;"));
+    const bool math = operation == QStringLiteral("markdown.previewMath");
+    const auto job = submit(runtime.session, operation,
+                            preview(math ? QStringLiteral("$\\frac{a^2+1}{\\sqrt{b}}$")
+                                         : QStringLiteral("graph TD\n A[Alpha] --> B[Beta]"),
+                                    QStringLiteral("mermaid"), 1, 1, 2000),
+                            &owner);
+    QTRY_VERIFY_WITH_TIMEOUT(job->finished, 30000);
+    QCOMPARE(job->result.status, WebViewJobResult::Status::Success);
+    QVERIFY(inkPixels(image(job->result.value)) > 30);
+    const auto state = evaluateObject(runtime.page, QStringLiteral("window.previewIsolation"));
+    // Observe while attached, not after runPreview's finally has removed the job DOM.
+    QVERIFY(state.value(QStringLiteral("laidOut")).toBool());
+    QVERIFY(state.value(QStringLiteral("scrollStable")).toBool());
+    QVERIFY(state.value(QStringLiteral("readerStable")).toBool());
+    QVERIFY(!state.value(QStringLiteral("hit")).toBool());
+  }
+  evaluate(runtime.page, QStringLiteral("previewObserver.disconnect();"));
 }
 
 void TestMarkdownWebJobs::graphAlgorithms_data() {

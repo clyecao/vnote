@@ -4,18 +4,20 @@
 #include <QDialogButtonBox>
 #include <QLabel>
 #include <QPushButton>
-#include <QTextBrowser>
 #include <QUrl>
 #include <QVBoxLayout>
 
+#include <utils/docsutils.h>
+#include <widgets/editors/simplemarkdowneditor.h>
+
 using namespace vnotex;
 
-UpdateDialog::UpdateDialog(const UpdateInfo &p_info, QWidget *p_parent)
+UpdateDialog::UpdateDialog(ServiceLocator &p_services, const UpdateInfo &p_info, QWidget *p_parent)
     : QDialog(p_parent), m_info(p_info) {
-  setupUi();
+  setupUi(p_services);
 }
 
-void UpdateDialog::setupUi() {
+void UpdateDialog::setupUi(ServiceLocator &p_services) {
   setWindowTitle(tr("Check for Updates"));
   setModal(true);
 
@@ -33,10 +35,16 @@ void UpdateDialog::setupUi() {
   m_summary->setOpenExternalLinks(true);
   layout->addWidget(m_summary);
 
-  m_notes = new QTextBrowser(this);
-  m_notes->setOpenExternalLinks(true);
-  m_notes->setMinimumHeight(180);
-  layout->addWidget(m_notes, 1);
+  const auto releaseNotes = m_info.updateAvailable
+                                ? m_info.releaseNotes
+                                : DocsUtils::getDocText(QStringLiteral("changes.md"));
+  if (!releaseNotes.isEmpty()) {
+    auto *notes = new SimpleMarkdownEditor(p_services, this);
+    notes->setReadOnly(true);
+    notes->setPlainText(releaseNotes);
+    notes->setMinimumHeight(180);
+    layout->addWidget(notes, 1);
+  }
 
   m_status = new QLabel(this);
   m_status->setWordWrap(true);
@@ -58,11 +66,10 @@ void UpdateDialog::setupUi() {
   if (!m_info.updateAvailable) {
     m_headline->setText(tr("VNote is up to date."));
     m_summary->setText(tr("You are running version %1.").arg(m_info.currentVersion));
-    m_notes->setVisible(false);
     m_releasePageButton->setVisible(false);
     m_skipButton->setVisible(false);
     m_laterButton->setText(tr("Close"));
-    resize(420, 160);
+    resize(releaseNotes.isEmpty() ? QSize(420, 160) : QSize(560, 460));
     return;
   }
 
@@ -71,23 +78,31 @@ void UpdateDialog::setupUi() {
                         "version and install it yourself.")
                          .arg(m_info.currentVersion));
 
+#ifdef Q_OS_WIN
+  m_summary->setText(m_summary->text() + QStringLiteral("\n\n") +
+                     tr("Update Now downloads the update, then closes and reopens VNote."));
+  auto *updateButton = buttons->addButton(tr("Update Now"), QDialogButtonBox::ActionRole);
+  updateButton->setAutoDefault(false);
+  updateButton->setDefault(false);
+  connect(updateButton, &QPushButton::clicked, this, &UpdateDialog::updateRequested);
+#endif
+
   connect(m_releasePageButton, &QPushButton::clicked, this, [this]() {
     QDesktopServices::openUrl(QUrl(m_info.releaseUrl));
     accept();
   });
 
-  if (m_info.releaseNotes.isEmpty()) {
-    m_notes->setVisible(false);
-  } else {
-    // Release bodies are Markdown; render them as plain text rather than
-    // half-interpreting them as HTML.
-    m_notes->setPlainText(m_info.releaseNotes);
-  }
-
-  resize(560, 460);
+  resize(560, m_info.releaseNotes.isEmpty() ? 180 : 460);
 }
 
 void UpdateDialog::setFailed(const QString &p_message) {
   m_status->setVisible(true);
   m_status->setText(tr("Could not check for updates: %1").arg(p_message));
 }
+
+#ifdef Q_OS_WIN
+void UpdateDialog::setUpdateInProgress() {
+  m_status->setText(tr("An update is already in progress. Follow the updater window."));
+  m_status->setVisible(true);
+}
+#endif

@@ -1,45 +1,24 @@
 # Upstream release notes
 
-These notes describe upstream VNote 4.13.0. VNote Fork uses an independent version sequence;
+These notes describe upstream VNote 4.14.4. VNote Fork uses an independent version sequence;
 see [VNote Fork releases](https://github.com/clyecao/vnote/releases) for fork versions and downloads.
 
-## v4.13.0
-A feature release with outline mind maps, editable node-note previews, source-aware exports and refined editing on top of VNote 4.12.0:
+## v4.14.4
+A refinement release with smoother tree navigation, more flexible Markdown editing and improved formula paste on top of VNote 4.14.2, including the changes from the aborted 4.14.3 release:
 
-* **Mind maps and navigation**
-    * Open source-bound mind-map previews of document outlines, use a sole leading H1 as the central topic, and apply automatic branch colors
-    * Focus outline previews on the current heading and click nodes to navigate to their original source headings; reopen the preview after the outline changes
-    * Edit mind-map node notes in source-bound plain-text previews with normal autosave; keep these previews attached to their source rather than promoting them to independent tabs
-    * Compact node icon rows and fix the clipped Tags label when keyboard shortcut underlines are visible
-    * Add Open Link above Copy Link in mind-map URL context menus, including read-only maps
-    * Always open context-menu links in a new tab across Markdown, Typst and mind maps, regardless of the new-tab preference
-    * Allow Never Ask for local-file and custom-protocol link warnings and share the saved opt-out across warning paths
+* **Navigation and tasks**
+    * Add `Ctrl+G, F` for the View Window Mind Map action, configurable through `editor.core.shortcuts.MindMap`; existing profiles inherit it unless explicitly customized or disabled
+    * Create a Quick Note directly when only one scheme is available, without opening the scheme picker
+    * Expand or collapse task containers such as Git on double-click or Enter, including when filtering hides their children; keep leaf-task execution unchanged
+* **Interface**
+    * Animate expanding and collapsing Tasks, search results, Settings and United Entry trees consistently with Notebooks, Tags and Outline
+    * Make tree views in every bundled theme except Native more compact with smaller indentation and horizontal spacing while preserving row height; keep inline renaming within the row and restore each tree's original spacing when returning to Native
+    * Align notebook, search and task tree content with standard tree text by including theme borders and native text margins; preserve row heights and icon/count gaps
 * **Editing and Markdown**
-    * Enable Markdown marker concealment by default and move long-link concealment into the editor menu, with independent persisted preferences and existing opt-outs preserved
-    * Fix closing Markdown heading-marker highlighting and preserve syntax backgrounds on the cursor line; update vtextedit and both vendored cmark copies
-    * Preserve preformatted and class-hinted HTML code blocks when pasting Markdown, including indentation, language hints and embedded fences, without copying controls or swallowing surrounding prose
-    * Update bundled Turndown to 7.2.4 for improved link escaping and ordered-list indentation while retaining VNote's custom paste rules
-    * Add Ctrl+W and Ctrl+U editing shortcuts to plain-text fields; assign the default Ctrl+8 and Ctrl+9 shortcuts to unchecked and checked task lists instead of unordered and ordered lists
-    * Rename Toggle In-Place Preview to In-Place Preview
-* **Export**
-    * Make export targets and options follow the selected source types, including native Typst and MindMap source output; reject incompatible selections before creating output
-    * Export Typst through its native compiler to HTML and PDF, preserving authored page layouts; copy internal relative images for native source exports and report unbundled imports or dynamic references
-    * Add a shared, editable `web/css/export.css` stylesheet for HTML and HTML-based PDF/Custom exports; preserve user styles across upgrades and leave native Typst PDF unchanged
-    * Simplify option labels and explain when custom commands use original disk files rather than the current buffer snapshot
-* **Notebooks and interface**
-    * Support drag-and-drop changes to tag parent hierarchies
-    * Replace the node Mark dialog with separate Text and Background color menus using the existing 12 colors and PDF-style swatches; Auto clears only the selected override
-    * Keep Chinese IME input in toolbar popup fields on Windows and macOS, with frameless dismissal, overflow access, fullscreen focus and focus restoration after owned dialogs
-    * Move the raw-notebook action to the explorer title bar, inset editor status controls within their frame, and throttle tree-column remeasurement during resizing
-    * Use `Documents/vnote_notebook` for new first-run notebooks and manually added quick-note schemes without migrating existing folders or saved paths
-    * Reopen an existing default notebook during first-run setup without replacing its contents on failure; add `all-in-one.md` and pin it to Quick Access when the list is empty
-    * Add the default Quick Note in Current Notebook scheme using `Quick Notes/quick_note_%da%.md`; existing installations are not migrated, and the bundled Chinese welcome note is named `Welcome_zh_CN.md`
-    * Expand localized VNote Tips from 12 to 64 with Markdown, navigation, image, PDF, mind-map, export and customization guidance ([source](https://github.com/vnotex/vnote-documentations))
-    * Open localized release notes in a new read-only tab after an upgrade, with Simplified Chinese notes and English fallback
-* **Document infrastructure and reliability**
-    * Support application-owned memory documents in full Text, Markdown, Typst, MindMap, PDF and Image windows with explicit editor types and load/save callbacks
-    * Share persistence providers across ordinary, encrypted and memory documents; save memory snapshots asynchronously without clearing newer edits, keep them session-only, and gate file-only actions by capabilities
-    * Render rootless Typst and byte-backed PDF documents without temporary document files
-    * Improve native CI focus, fixture readiness and consent handling, fix plain-text test linking, and partition Typst coverage without dropping cases or extending test deadlines
-    * Make bundled editor tests follow `VNOTE_BUILD_TESTS`, keep the retained-GIF snapshot test opt-in locally and enabled in CI, and allow more time for macOS package WebEngine shutdown
-* **Translations**: Simplified Chinese (zh_CN), Japanese (ja) and Korean (ko) catalogs updated
+    * Update vtextedit to keep concealed-marker cursor boundaries consistent across keyboard and Vi navigation, and skip unnecessary cursor processing when persistent concealment is disabled
+    * Rename the concealment control to Markers Concealment and clarify the None, Passive, Moderate and Aggressive settings descriptions
+    * Add Moderate concealment: hide supported Markdown markers and link syntax, reveal them on cursor entry, and shorten long image and reference URLs
+    * Offer three Markdown editing experiences and show the choice again when upgrading from versions below `4.14.4`, preserving the saved concealment preset until a new choice is accepted
+    * Fix pasted MathML formulas ending in TeX commands, recover symbols according to their token role, and preserve identifier font variants
+    * Move the readable-width toolbar hint into shared Editor settings instead of Mind Map Editor settings
+* **Translations**: Simplified Chinese (zh_CN) and Japanese (ja) catalogs updated

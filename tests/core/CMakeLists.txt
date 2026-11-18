@@ -1,4 +1,13 @@
 # Core module tests
+add_qt_test(test_tododocument
+  SOURCES
+    test_tododocument.cpp
+    ${CMAKE_SOURCE_DIR}/src/core/tododocument.cpp
+  LINKS
+    cmark
+  GUILESS
+)
+
 add_qt_test(test_error
   SOURCES
     test_error.cpp
@@ -1046,6 +1055,13 @@ add_qt_test(test_notebook_core_service_reorder
   LINKS
     core_services
     vxcore
+)
+
+add_qt_test(test_commandlineoptions
+  SOURCES
+    test_commandlineoptions.cpp
+    ${CMAKE_SOURCE_DIR}/src/commandlineoptions.cpp
+  GUILESS
 )
 
 # SingleInstanceGuard tri-state tryRun(). The important case is BusyUnreachable:

@@ -16,6 +16,7 @@
 #include <core/services/taskservice.h>
 #include <gui/services/themeservice.h>
 #include <gui/utils/iconutils.h>
+#include <gui/utils/treechildcountdelegate.h>
 #include <gui/utils/treeviewutils.h>
 #include <models/tasktreemodel.h>
 #include <models/treefilterproxymodel.h>
@@ -44,7 +45,9 @@ void TaskPanel2::setupUI() {
 
   m_treeView = new QTreeView(this);
   m_treeView->setModel(m_proxyModel);
+  m_treeView->setItemDelegate(new TreeChildCountDelegate(m_treeView));
   m_treeView->setHeaderHidden(true);
+  m_treeView->setAnimated(true);
   TreeViewUtils::applyIndentation(m_treeView);
   m_treeView->setContextMenuPolicy(Qt::CustomContextMenu);
   m_treeView->setSelectionMode(QAbstractItemView::SingleSelection);
@@ -129,10 +132,10 @@ void TaskPanel2::initialize() {
 void TaskPanel2::onItemActivated(const QModelIndex &p_index) {
   const QModelIndex src = m_proxyModel->mapToSource(p_index);
   auto *task = m_model->taskForIndex(src);
-  if (task) {
+  if (task && task->getChildren().isEmpty()) {
     m_controller->runTask(task);
   } else {
-    // Group row: toggle expansion.
+    // Scope groups and task containers toggle expansion instead of running.
     m_treeView->setExpanded(p_index, !m_treeView->isExpanded(p_index));
   }
 }

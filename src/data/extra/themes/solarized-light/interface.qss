@@ -754,8 +754,14 @@ QTreeView {
 }
 
 QTreeView::item {
-    padding: 4px 8px;
+    padding: 4px 4px;
     border-left: 2px solid transparent;
+}
+
+/* Inline rename must fit the row instead of the form-field minimum. */
+QTreeView QLineEdit {
+    min-height: 0px;
+    padding: 0px;
 }
 
 QTreeView::item:hover {
@@ -1434,11 +1440,11 @@ QListView::item:selected:!active {
     border-left: 2px solid @widgets#qtabbar#tab#selected#border;
 }
 
-/* Status chips need the inverse focus edge on their dark semantic fills. */
+/* Status chips share the theme's keyboard-focus edge. */
 QToolButton[StatusBarCol="3"]:focus:enabled,
 QToolButton[StatusBarCol="3"]:hover:focus:enabled,
 QToolButton[StatusBarCol="3"]:pressed:focus:enabled {
-    border-color: @palette#border_statusbar_focus;
+    border-color: @widgets#qpushbutton#default#border;
 }
 
 QToolButton:disabled {

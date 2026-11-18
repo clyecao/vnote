@@ -4,14 +4,12 @@
 #include <QAction>
 #include <QApplication>
 #include <QComboBox>
-#include <QCursor>
 #include <QEvent>
 #include <QGuiApplication>
 #include <QHBoxLayout>
 #include <QKeyEvent>
 #include <QLabel>
 #include <QLineEdit>
-#include <QMenu>
 #include <QScreen>
 #include <QSignalBlocker>
 #include <QSizePolicy>
@@ -76,6 +74,7 @@ void UnitedEntry::setupUI() {
 
   m_toggleButton = new QToolButton(this);
   m_toggleButton->setAutoRaise(true);
+  m_toggleButton->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
   m_toggleButton->setToolTip(tr("United Entry"));
   // Match the toolbar's icon size (passed in by the toolbar helper); the
   // toolbar's setIconSize only propagates to buttons it creates for actions,
@@ -93,7 +92,7 @@ void UnitedEntry::setupUI() {
   m_comboBox->setMaximumWidth(c_maxInputWidth);
   m_comboBox->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
   setMaximumWidth(c_maxInputWidth);
-  m_comboBox->lineEdit()->setPlaceholderText(tr("Type to command"));
+  m_comboBox->lineEdit()->setPlaceholderText(tr("Type to search files by name in all notebooks"));
   m_comboBox->lineEdit()->setClearButtonEnabled(true);
   m_comboBox->lineEdit()->installEventFilter(this);
   m_comboBox->installEventFilter(this);
@@ -115,8 +114,8 @@ void UnitedEntry::setupUI() {
   // aligned with the other toolbar icons.
   setMinimumHeight(m_comboBox->sizeHint().height() + 2);
 
-  // Collapsed by default: show only the icon button. A hidden combo box
-  // contributes no width, so the widget shrinks to the icon.
+  // Collapsed by default: show only the button. A hidden combo box
+  // contributes no width, so the widget shrinks to the button.
   m_comboBox->hide();
 
   setupActions();
@@ -131,32 +130,7 @@ void UnitedEntry::setupUI() {
 
 void UnitedEntry::setupActions() {
   auto *themeService = m_services.get<ThemeService>();
-  const auto fg = themeService->paletteColor("widgets#unitedentry#icon#fg");
   const auto busyFg = themeService->paletteColor("widgets#unitedentry#icon#busy#fg");
-
-  const auto menuIcon = IconUtils::fetchIcon(themeService->getIconFile("menu.svg"), fg);
-  m_menuIconAction = m_comboBox->lineEdit()->addAction(menuIcon, QLineEdit::TrailingPosition);
-  m_menuIconAction->setText(tr("Options"));
-
-  auto menu = WidgetsFactory::createMenu(this);
-  m_menuIconAction->setMenu(menu);
-
-  {
-    auto *configMgr = m_services.get<ConfigMgr2>();
-    auto expandAct = menu->addAction(tr("Expand All"), this, [this, configMgr](bool checked) {
-      configMgr->getWidgetConfig().setUnitedEntryExpandAllEnabled(checked);
-      m_mgr->setExpandAllEnabled(checked);
-    });
-    expandAct->setCheckable(true);
-    expandAct->setChecked(configMgr->getWidgetConfig().getUnitedEntryExpandAllEnabled());
-    m_mgr->setExpandAllEnabled(expandAct->isChecked());
-  }
-
-  connect(m_menuIconAction, &QAction::triggered, this, [this]() {
-    const auto pos = QCursor::pos();
-    auto menu = m_menuIconAction->menu();
-    menu->exec(pos);
-  });
 
   const auto busyIcon = IconUtils::fetchIcon(themeService->getIconFile("busy.svg"), busyFg);
   m_busyIconAction = m_comboBox->lineEdit()->addAction(busyIcon, QLineEdit::TrailingPosition);
@@ -294,11 +268,13 @@ bool UnitedEntry::handleLineEditKeyPress(QKeyEvent *p_event) {
 
   case Qt::Key_E:
     if (WidgetUtils::isViControlModifier(modifiers)) {
-      // Eliminate input till the entry name.
+      // Keep only an explicit command key; filename queries have no key to retain.
       const auto text = lineEdit->text();
       const auto entry = UnitedEntryHelper::parseUserEntry(text);
-      if (!entry.m_name.isEmpty()) {
-        lineEdit->setText(entry.m_name + QLatin1Char(' '));
+      if (!entry.m_isCommand) {
+        lineEdit->clear();
+      } else if (!entry.m_name.isEmpty()) {
+        lineEdit->setText(QLatin1Char('>') + entry.m_name + QLatin1Char(' '));
       }
       return true;
     }
@@ -306,11 +282,17 @@ bool UnitedEntry::handleLineEditKeyPress(QKeyEvent *p_event) {
 
   case Qt::Key_F:
     if (WidgetUtils::isViControlModifier(modifiers)) {
-      // Select the entry name.
+      // Select the explicit key without its marker, or the entire filename query.
       const auto text = lineEdit->text();
       const auto entry = UnitedEntryHelper::parseUserEntry(text);
-      if (!entry.m_name.isEmpty()) {
-        lineEdit->setSelection(0, entry.m_name.size());
+      if (!entry.m_isCommand) {
+        lineEdit->selectAll();
+      } else if (!entry.m_name.isEmpty()) {
+        auto start = text.indexOf(QLatin1Char('>')) + 1;
+        while (text.at(start).isSpace()) {
+          ++start;
+        }
+        lineEdit->setSelection(start, entry.m_name.size());
       }
       return true;
     }
@@ -411,15 +393,15 @@ void UnitedEntry::processInput() {
   const auto text = m_comboBox->lineEdit()->text();
   const auto entry = UnitedEntryHelper::parseUserEntry(text);
   if (entry.m_name.isEmpty()) {
-    filterEntryListWidgetEntries(entry.m_name);
+    filterEntryListWidgetEntries(entry.m_name, entry.m_isCommand);
     popupWidget(getEntryListWidget());
     m_lastEntry.clear();
     return;
   }
 
-  // Filter the help widget if space after entry name is not entered yet.
-  if (entry.m_name == text.trimmed() && !text.back().isSpace()) {
-    if (filterEntryListWidgetEntries(entry.m_name)) {
+  // Suggest explicit keys until a separating whitespace or arguments are entered.
+  if (entry.m_isCommand && entry.m_args.isEmpty() && !text.back().isSpace()) {
+    if (filterEntryListWidgetEntries(entry.m_name, true)) {
       popupWidget(getEntryListWidget());
       m_lastEntry.clear();
       return;
@@ -430,6 +412,8 @@ void UnitedEntry::processInput() {
     }
 
     if (m_lastEntry) {
+      m_mgr->setExpandAllEnabled(
+          m_services.get<ConfigMgr2>()->getWidgetConfig().getUnitedEntryExpandAllEnabled());
       setBusy(true);
       m_lastEntry->process(entry.m_args,
                            std::bind(&UnitedEntry::popupWidget, this, std::placeholders::_1));
@@ -456,10 +440,13 @@ const QSharedPointer<QTreeWidget> &UnitedEntry::getEntryListWidget() {
     m_entryListWidget->setHeaderHidden(false);
     m_entryListWidget->setHeaderLabels(QStringList() << tr("Entry") << tr("Description"));
 
+    // The discovery row has no command key; activation enters command mode.
+    m_entryListWidget->addTopLevelItem(new QTreeWidgetItem({tr("Show and run entries >")}));
     const auto entries = m_mgr->getEntries();
     for (const auto &entry : entries) {
-      m_entryListWidget->addTopLevelItem(
-          new QTreeWidgetItem({entry->name(), entry->description()}));
+      auto *item = new QTreeWidgetItem({entry->name(), entry->description()});
+      item->setData(0, Qt::UserRole, entry->name());
+      m_entryListWidget->addTopLevelItem(item);
     }
 
     connect(m_entryListWidget.data(), &QTreeWidget::itemActivated, this,
@@ -473,24 +460,34 @@ QSharedPointer<QLabel> UnitedEntry::getInfoWidget(const QString &p_info) {
   return EntryWidgetFactory::createLabel(p_info);
 }
 
-bool UnitedEntry::filterEntryListWidgetEntries(const QString &p_name) {
+bool UnitedEntry::filterEntryListWidgetEntries(const QString &p_name, bool p_isCommand) {
   const auto &entryListWidget = getEntryListWidget();
+  entryListWidget->setHeaderHidden(!p_isCommand);
+  entryListWidget->setColumnHidden(1, !p_isCommand);
 
-  if (p_name.isEmpty()) {
-    for (int i = 0; i < entryListWidget->topLevelItemCount(); ++i) {
-      entryListWidget->topLevelItem(i)->setHidden(false);
-    }
-    return true;
-  }
-
-  auto items = entryListWidget->findItems(p_name, Qt::MatchStartsWith);
+  QTreeWidgetItem *firstVisible = nullptr;
+  QTreeWidgetItem *exactMatch = nullptr;
   for (int i = 0; i < entryListWidget->topLevelItemCount(); ++i) {
-    entryListWidget->topLevelItem(i)->setHidden(true);
+    auto *item = entryListWidget->topLevelItem(i);
+    const auto key = item->data(0, Qt::UserRole).toString();
+    const bool visible =
+        p_isCommand ? !key.isEmpty() && key.startsWith(p_name, Qt::CaseInsensitive) : key.isEmpty();
+    item->setHidden(!visible);
+    if (visible && !firstVisible) {
+      firstVisible = item;
+    }
+    if (p_isCommand && visible && key == p_name) {
+      exactMatch = item;
+    }
   }
-  for (const auto &item : items) {
-    item->setHidden(false);
+  auto *current = entryListWidget->currentItem();
+  if (exactMatch) {
+    // Keep case-distinct aliases consistent with the exact-case-first resolver.
+    entryListWidget->setCurrentItem(exactMatch);
+  } else if (!current || current->isHidden()) {
+    entryListWidget->setCurrentItem(firstVisible);
   }
-  return !items.isEmpty();
+  return firstVisible != nullptr;
 }
 
 void UnitedEntry::handleEntryListItemActivated(QTreeWidgetItem *p_item) {
@@ -498,13 +495,10 @@ void UnitedEntry::handleEntryListItemActivated(QTreeWidgetItem *p_item) {
     return;
   }
 
-  const auto name = p_item->text(0);
-  if (name.isEmpty()) {
-    return;
-  }
-
+  const auto name = p_item->data(0, Qt::UserRole).toString();
   auto *lineEdit = m_comboBox->lineEdit();
-  lineEdit->setText(name + QLatin1Char(' '));
+  lineEdit->setText(name.isEmpty() ? QStringLiteral(">")
+                                   : QLatin1Char('>') + name + QLatin1Char(' '));
   lineEdit->setFocus();
 
   // setText's textChanged only debounce-starts the timer; call directly for
@@ -726,10 +720,8 @@ void UnitedEntry::restorePopupVisibility() {
 
 void UnitedEntry::refreshIcons() {
   auto *themeService = m_services.get<ThemeService>();
-  const auto fg = themeService->paletteColor("widgets#unitedentry#icon#fg");
   const auto busyFg = themeService->paletteColor("widgets#unitedentry#icon#busy#fg");
 
-  m_menuIconAction->setIcon(IconUtils::fetchIcon(themeService->getIconFile("menu.svg"), fg));
   m_busyIconAction->setIcon(IconUtils::fetchIcon(themeService->getIconFile("busy.svg"), busyFg));
 
   if (m_activateAction) {

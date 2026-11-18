@@ -1,24 +1,113 @@
 # Changes
+
 ## Unreleased
-* Prevent concealed Markdown markers from blinking during unrelated typing by retaining and remapping the last parsed concealment until fresh results arrive
-* Preserve annotated KaTeX and MathML formulas when parsing HTML to Markdown and pasting, retaining inline/display math and TeX source without duplicate rendered text
-* Fix Windows HTTP API token issuance under elevated accounts while retaining strict owner-only credential storage
-* Synchronize notification backlog scrolling tests with completed layout and preserve first-run Windows HTTP API test diagnostics
-* Avoid blank WebEngine frames when switching warm Markdown tabs by restoring page visibility before rendering children, without keeping inactive pages active
-* Keep Windows status and link-preview overlays from promoting entire tab containers to native windows, avoiding stale tab surfaces and preview focus changes
-* Audit HTTP API requests, rejected connections and asynchronous mutation outcomes with privacy-safe structured records and shared request IDs
-* Add Copy to the one-time HTTP API token dialog, remove the token-status footer, and report revocation failures through VNote notifications
-* Simplify token expiry to day presets or Never, retain the 90-day default, and show dates without detailed timestamps
-* Right-align HTTP API New/Revoke/Refresh and Theme Refresh/Open Location action rows
-* Move HTTP API token issuance into a separate dialog with a full-width notebook list and a labeled permissions group
-* Store Windows HTTP API token verifiers in the local profile instead of roaming configuration, preserving portable-profile isolation
-* Move HTTP API service status to its own row below Enable HTTP API, show Service disabled when off, and remove the duplicate endpoint line
-* Remove the unused External HTTPS URL setting; public endpoints remain configured in the reverse proxy and API clients
-* Remove note paths and raw exception details from raw-note create/rename diagnostics; verify the raw-notebook HTTP API lifecycle and nonmutating trash rejection
-* Add an opt-in, loopback-only HTTP API for local agents and HTTPS reverse-proxy clients, with independent transport, REST and VNote integration modules
-* Add owner-issued notebook-scoped API tokens with optional expiry, separate read/live-read/write/trash permissions, private verifier storage and immediate revocation controls in Settings
-* Expose bounded note listing, saved/live reads, search and conditional create/edit/append/rename/trash operations without overwriting dirty editors or exporting protected notes
-* Add strict reversible note trash without the legacy permanent-delete fallback, and preserve save/sync coordination, actual mutation outcomes and orderly API shutdown
+
+* Fix false image asset publication errors on Windows shared folders that lack file identity support, while retaining no-overwrite and reparse-point checks
+
+## v4.14.4
+A refinement release with smoother tree navigation, more flexible Markdown editing and improved formula paste on top of VNote 4.14.2, including the changes from the aborted 4.14.3 release:
+
+* **Navigation and tasks**
+    * Add `Ctrl+G, F` for the View Window Mind Map action, configurable through `editor.core.shortcuts.MindMap`; existing profiles inherit it unless explicitly customized or disabled
+    * Create a Quick Note directly when only one scheme is available, without opening the scheme picker
+    * Expand or collapse task containers such as Git on double-click or Enter, including when filtering hides their children; keep leaf-task execution unchanged
+* **Interface**
+    * Scroll overflowing view-area tabs with vertical or horizontal mouse-wheel input, including macOS and high-resolution mice, without switching the active document
+    * Show shared circular count badges at the visible right edge of Notebook, Tags, Outline and Tasks trees, keeping counts visible during horizontal scrolling and widening badges for larger counts
+    * Show directly tagged note counts in Tags badges; defer tag queries while the panel is hidden or behind another dock tab, reuse unchanged results on reopening, and preserve selection during count refreshes
+    * Animate expanding and collapsing Tasks, search results, Settings and United Entry trees consistently with Notebooks, Tags and Outline
+    * Make tree views in every bundled theme except Native more compact with smaller indentation and horizontal spacing while preserving row height; keep inline renaming within the row and restore each tree's original spacing when returning to Native
+    * Align notebook, search and task tree content with standard tree text by including theme borders and native text margins; preserve row heights and icon/count gaps
+* **Editing and Markdown**
+    * Default Auto Section Numbering to off in Markdown read and edit modes for new profiles and missing settings, while keeping the Outline panel default on; preserve all saved numbering preferences
+    * Press Enter at the end of the second consecutive empty quote line to replace both quote lines with two plain empty lines and continue outside the block quote
+    * Insert a new line after the entire collapsed block when pressing Enter at its header's end in text and Markdown editors, including VSCode and Vi input modes; Vi `o` also opens below the fold
+    * Update vtextedit to keep concealed-marker cursor boundaries consistent across keyboard and Vi navigation, and skip unnecessary cursor processing when persistent concealment is disabled
+    * Rename the concealment control to Markers Concealment and clarify the None, Passive, Moderate and Aggressive settings descriptions
+    * Add Moderate concealment: hide supported Markdown markers and link syntax, reveal them on cursor entry, and shorten long image and reference URLs
+    * Offer three Markdown editing experiences and show the choice again when upgrading from versions below `4.14.4`, preserving the saved concealment preset until a new choice is accepted
+    * Fix pasted MathML formulas ending in TeX commands, recover symbols according to their token role, and preserve identifier font variants
+    * Move the readable-width toolbar hint into shared Editor settings instead of Mind Map Editor settings
+    * Show Collapse and Expand in Markdown code-block context menus only when no text is selected
+* **Translations**: Simplified Chinese (zh_CN) and Japanese (ja) catalogs updated
+
+## v4.14.2
+A refinement release with safer notebook tasks, Windows integration and smoother editing on top of VNote 4.14.1:
+
+* **Notebook tasks and security**
+    * Require local notebook trust before running notebook tasks or evaluating their variables; remember approval across restarts, forget it on explicit close, and automatically trust only newly created local notebooks
+* **Editing and Markdown**
+    * Replace the two Markdown concealment toggles with None, Passive and Aggressive presets; default to Aggressive without migrating the old settings, map the editing-experience choices to Aggressive/Passive, and use Aggressive in embedded Markdown editors
+    * Update vtextedit to support longer compact URL destinations and keep insertion carets inside concealed closing markers while typing
+    * Recover named functions, limits, upright identifiers and supported spacing when pasting browser MathML without TeX annotations, including sinc formulas
+* **Windows integration and updates**
+    * Add per-user Read in VNote and Edit in VNote context-menu actions for applied built-in file suffixes through Settings → File Associations; open reading in a detached window and editing in the main window, preserving explicit modes through startup and single-instance forwarding
+    * Reconcile changed context-menu suffixes and remove legacy all-files entries without requiring administrator privileges
+    * Check GitHub and Gitee releases without REST APIs; fetch explicitly requested GitHub update assets directly to avoid release-metadata API rate limits
+    * Support authenticated Windows delta updates when eligible, reconstruct and verify the complete target payload before requesting shutdown, and use the signed full package only when safe fallback rules permit
+    * Display update release notes in a lightweight themed Markdown editor and migrate the last-update-check timestamp to machine-local session configuration
+* **Interface and configuration**
+    * Auto-hide view-split corner buttons until the tab strip is hovered, keeping tabs stationary, open menus usable and detached-window shortcuts active
+    * Add Attach to Main Window beside the detached window's Stay on Top pin to move all tabs into the selected main split without losing unsaved edits or undo history; keep the pin color consistent with the active Open Windows button across theme changes
+    * Show labels beside the Home and United Entry toolbar icons, matching Export
+    * Restore the default Quick Note scheme for empty saved lists when upgrading from below `4.14.2`, including `4.14.1`; preserve custom schemes and later empty-list opt-outs
+    * Add missing default United Entry aliases when upgrading from below `4.14.1` with a nonempty saved list, preserving custom definitions and explicit empty-list opt-outs
+    * Refresh the English and Chinese welcome guides, README screenshots and development documentation
+* **Reliability**
+    * Fix CI recovery-archive, folded math-preview geometry, heading-navigation and production-view linkage fixtures; disable the repeatedly timing-out Linux view-area suite in CTest while retaining its build and Windows coverage
+* **Translations**: Simplified Chinese (zh_CN), Japanese (ja) and Korean (ko) catalogs updated
+
+## v4.14.1
+A refinement release with source-linked outline editing, steadier Markdown previews and smoother navigation on top of VNote 4.14.0:
+
+* **Outlines and mind maps**
+    * Edit Markdown and safely mapped Typst source headings through toolbar mind-map previews: rename topics, add children or siblings, and move sections with confirmation and paired Undo/Redo
+    * Apply accepted edits directly to the source and reuse its Auto Save, Backup File or None policy; closing a rejected topic draft offers Discard or Cancel without discarding changes already applied to the source
+    * Keep read-only sources, PDF outlines and unsupported mappings navigation-only; restrict generated maps to basic topic and structure editing, and require reopening after independent source changes
+    * Extend Outline panel and popup reordering to ordinary mind maps and safely mapped Typst sections, preserving hierarchy, section content and undo history
+    * Keep outline mind-map previews open and focused when navigating to source headings, avoid duplicate section numbers, and preserve newly added topics while source updates settle
+* **Editing and Markdown**
+    * Keep concealed Markdown formatting markers hidden while editing, with marker-skipping cursor movement; preserve link reveal-on-entry and the existing concealment toggles
+    * Ask once when opening a Markdown view whether to conceal or show Markdown markers, remember the choice, and point to the toolbar menu for later changes
+    * Update vtextedit to improve folded source headers and preview placement, preserve the viewport during passive layout and unfolding, and stabilize Markdown concealment during IME composition
+    * Prevent in-place preview staging flashes in the Markdown reader and fix reader navigation restoration and view teardown lifetime
+* **Interface and reliability**
+    * Move United Entry's Expand All preference into its own Settings page while retaining the saved choice
+    * Select VNote Tips using the resolved application language rather than the regional locale
+    * Keep the existing theme overflow indicators readable on narrow view-window toolbars instead of clipping them to a gray square
+    * Attach document views before showing detached windows to avoid an empty first frame
+    * Update vxcore with desktop-validated mobile-branch integration, including trusted-root alias handling and private long-path fixture fixes
+    * Fix widget CI linkage by testing production view-window implementations
+* **Translations**: Simplified Chinese (zh_CN) and Japanese (ja) catalogs updated
+
+## v4.14.0
+A feature release with scoped HTTP automation, richer Markdown paste and smoother navigation on top of VNote 4.13.0:
+
+* **HTTP automation and security**
+    * Add an opt-in, loopback-only HTTP API for local agents and administrator-managed HTTPS reverse proxies, with notebook-scoped tokens and separate read, live-read, write and trash permissions
+    * List notes, read saved or live content, search, and conditionally create, edit, append, rename or trash notes without overwriting dirty editors or exposing protected notes
+    * Require reversible trash without falling back to permanent deletion, preserve save/sync coordination, and drain pending operations during shutdown
+    * Manage tokens in Settings with a dedicated issuance dialog, notebook and permission selection, expiry presets or Never, a 90-day default, one-time Copy and immediate revocation
+    * Store listener settings in local session configuration and Windows token verifiers in the local profile, preserving portable isolation and owner-only access, including elevated accounts
+    * Audit requests, rejected connections and asynchronous mutation outcomes with privacy-safe structured records and shared request IDs; omit note paths and raw exception details from create/rename diagnostics
+* **Editing and Markdown**
+    * Preserve KaTeX and MathML formulas when parsing HTML to Markdown and pasting: prefer annotated TeX, recover supported MathML when annotations are stripped, and retain inline/display math and labeled underbraces without duplicate rendered text
+    * Avoid unnecessary escapes in leading numbered headings while preserving literal backslashes and paragraph list protection
+    * Prevent concealed Markdown markers from blinking during unrelated typing by retaining and remapping the last parsed concealment until fresh results arrive
+    * Add Collapse and Expand below Export in read-mode code-block context menus
+    * Restore warm Markdown page visibility before rendering when switching tabs, avoiding blank WebEngine frames without keeping inactive pages active
+* **Navigation and mind maps**
+    * Search file names across notebooks with ordinary United Entry input; require the explicit `>` prefix for commands, show command discovery for empty input, and enable Expand All by default while retaining saved preferences
+    * Restore focus to the source content after closing previews, including the mind-map canvas
+    * Refine mind-map field menus, shortcut editors and node-anchored popups, improve node icons, and place the nonempty note indicator before the hyperlink indicator
+    * Open files classified as Others with the system application instead of the plaintext editor, retain inferred text/image viewers, and skip unsupported restored tabs without launching external applications
+* **Interface and reliability**
+    * Enlarge Sort Folders and Sort Notes to 800 × 600 by default and select the triggering folder or note when present
+    * Reserve persistent editor status rows below the content and prevent Windows status/link-preview overlays from promoting entire tab containers to native windows
+    * Stack notification action buttons vertically, unify Settings card surfaces and action alignment, restore complete theme button borders, and clarify editor toolbar option hints
+    * Select bundled release-note language from the loaded UI translation rather than the regional locale
+    * Improve native CI credential, popup and notification-layout checks, preserve first-failure diagnostics, and recover transient macOS package-mount and WebEngine-shutdown failures
+* **Translations**: Simplified Chinese (zh_CN), Japanese (ja) and Korean (ko) catalogs updated
 
 ## v4.13.0
 A feature release with outline mind maps, editable node-note previews, source-aware exports and refined editing on top of VNote 4.12.0:

@@ -74,20 +74,19 @@ QString ViewWindow2::s_attachmentFullIconMasterColor;
 
 QIcon ViewWindow2::s_attachmentFullIcon;
 
-namespace {
-int questionSaveOrDiscard(ViewWindow2 *p_view, const QString &p_text,
-                          const QString &p_information) {
-  if (p_view->getBuffer().canSave()) {
+int ViewWindow2::questionSaveOrDiscard(const QString &p_text, const QString &p_information) {
+  if (getBuffer().canSave()) {
     return MessageBoxHelper::questionSaveDiscardCancel(MessageBoxHelper::Question, p_text,
-                                                       p_information, QString(), p_view);
+                                                       p_information, QString(), this);
   }
   QMessageBox box(QMessageBox::Question, QObject::tr("Discard Changes"), p_text,
-                  QMessageBox::Discard | QMessageBox::Cancel, p_view);
+                  QMessageBox::Discard | QMessageBox::Cancel, this);
   box.setInformativeText(p_information);
   box.setDefaultButton(QMessageBox::Cancel);
   return box.exec();
 }
 
+namespace {
 ViewWindow2 *viewWindowForFocus(QWidget *p_widget) {
   for (auto *widget = p_widget; widget; widget = widget->parentWidget()) {
     if (auto *view = qobject_cast<ViewWindow2 *>(widget)) {
@@ -205,9 +204,9 @@ Buffer2 &ViewWindow2::getBuffer() { return m_buffer; }
 const NodeIdentifier &ViewWindow2::getNodeId() const { return m_buffer.nodeId(); }
 
 bool ViewWindow2::replaceBuffer(const Buffer2 &p_buffer, const FileOpenSettings &p_settings) {
-  if (m_bufferReplacementInProgress || !supportsBufferReplacement() || !m_buffer.isValid() ||
-      m_buffer.nodeId().isVirtual() || !p_buffer.isValid() || p_buffer.nodeId().isVirtual() ||
-      p_buffer.id() == m_buffer.id()) {
+  if (isOutlineSourceRetirementBlocked() || m_bufferReplacementInProgress ||
+      !supportsBufferReplacement() || !m_buffer.isValid() || m_buffer.nodeId().isVirtual() ||
+      !p_buffer.isValid() || p_buffer.nodeId().isVirtual() || p_buffer.id() == m_buffer.id()) {
     return false;
   }
   QPointer<ViewWindow2> guard(this);
@@ -367,6 +366,18 @@ QString ViewWindow2::getName() const {
 
 QSharedPointer<OutlineProvider> ViewWindow2::getOutlineProvider() const { return nullptr; }
 
+bool ViewWindow2::activateOutlineHeading(int p_index) {
+  const QPointer<OutlineProvider> provider(getOutlineProvider().data());
+  if (!isEnabled() || !provider || !provider->getOutline() || p_index < 0 ||
+      p_index >= provider->getOutline()->m_headings.size() ||
+      provider->getOutline()->m_headings[p_index].m_isPlaceholder) {
+    return false;
+  }
+  // Markdown and native mind-map handlers only scroll/select. Focusing handlers override this API.
+  emit provider->headingClicked(p_index);
+  return true;
+}
+
 QSharedPointer<CommentProvider> ViewWindow2::getCommentProvider() const { return nullptr; }
 
 QString ViewWindow2::getTitle() const {
@@ -450,7 +461,7 @@ bool ViewWindow2::isModified() const {
 // ============ Lifecycle ============
 
 void ViewWindow2::setNoteConversionFrozen(bool p_frozen) {
-  if (m_noteConversionFrozen == p_frozen) {
+  if (m_noteConversionFrozen == p_frozen || (p_frozen && isOutlineSourceRetirementBlocked())) {
     return;
   }
   m_noteConversionFrozen = p_frozen;
@@ -478,7 +489,7 @@ void ViewWindow2::setNoteConversionFrozen(bool p_frozen) {
 }
 
 bool ViewWindow2::aboutToClose(bool p_force) {
-  if (m_noteConversionFrozen || m_contentReplacementFrozen) {
+  if (isOutlineSourceRetirementBlocked() || m_noteConversionFrozen || m_contentReplacementFrozen) {
     return false;
   }
   QPointer<ViewWindow2> guard(this);
@@ -496,7 +507,7 @@ bool ViewWindow2::aboutToClose(bool p_force) {
 
   if (!p_force && isModified()) {
     const int ret = questionSaveOrDiscard(
-        this, tr("Close note (%1) with unsaved changes?").arg(getName()),
+        tr("Close note (%1) with unsaved changes?").arg(getName()),
         m_buffer.canSave()
             ? tr("Your changes will be lost if you don't save them.")
             : tr("This buffer has no save destination. Closing it will lose its changes."));
@@ -596,6 +607,13 @@ void ViewWindow2::addToolBar(QToolBar *p_bar) {
   Q_ASSERT(!m_toolBar);
   m_toolBar = p_bar;
   m_topLayout->addWidget(p_bar);
+
+  if (auto *extension = p_bar->findChild<QToolButton *>(QStringLiteral("qt_toolbar_ext_button"),
+                                                        Qt::FindDirectChildrenOnly)) {
+    // The narrow native extension cannot fit normal tool button insets or the native border.
+    extension->setStyleSheet(
+        QStringLiteral("#qt_toolbar_ext_button { margin: 0; padding: 0; border: none; }"));
+  }
 
   // Enable drag-drop on toolbar for attachment support.
   p_bar->setAcceptDrops(true);
@@ -904,10 +922,8 @@ QAction *ViewWindow2::addAction(QToolBar *p_toolBar, ViewWindowToolBarHelper2::A
     }
     // Default button click triggers Heading 1.
     connect(act, &QAction::triggered, this, [this]() { handleTypeAction(TypeHeading1); });
-    // Menu items (H2-H6, Clear) trigger via data().
-    auto *toolBtn = dynamic_cast<QToolButton *>(p_toolBar->widgetForAction(act));
-    Q_ASSERT(toolBtn);
-    connect(toolBtn->menu(), &QMenu::triggered, this,
+    // Menu items (H1-H6, Clear) trigger via data().
+    connect(act->menu(), &QMenu::triggered, this,
             [this](QAction *p_act) { handleTypeAction(p_act->data().toInt()); });
     break;
   }
@@ -1022,9 +1038,8 @@ QAction *ViewWindow2::addAction(QMenu *p_menu, ViewWindowToolBarHelper2::Action 
 
   case ViewWindowToolBarHelper2::ToggleLivePreview:
   case ViewWindowToolBarHelper2::InplacePreview:
-  case ViewWindowToolBarHelper2::ConcealDestinations:
-  case ViewWindowToolBarHelper2::ConcealMarkdownMarkers:
-    // Visible only in Edit mode. Subclass wires the toggled signal.
+  case ViewWindowToolBarHelper2::Concealment:
+    // Visible only in Edit mode. Subclass wires the action handlers.
     act->setVisible(m_mode == ViewWindowMode::Edit);
     connect(this, &ViewWindow2::modeChanged, this,
             [act, this]() { act->setVisible(m_mode == ViewWindowMode::Edit); });
@@ -1297,7 +1312,7 @@ void ViewWindow2::setAutoReload(bool p_enabled) { m_autoReload = p_enabled; }
 bool ViewWindow2::autoReload() const { return m_autoReload; }
 
 bool ViewWindow2::reload() {
-  if (m_contentReplacementFrozen)
+  if (isOutlineSourceRetirementBlocked() || m_contentReplacementFrozen)
     return false;
   if (!m_buffer.canReload()) {
     return false;
@@ -1317,7 +1332,7 @@ bool ViewWindow2::reload() {
   if (wasDirty) {
     // Ask to save changes.
     int ret = questionSaveOrDiscard(
-        this, tr("Reload note (%1) and discard unsaved changes?").arg(getName()),
+        tr("Reload note (%1) and discard unsaved changes?").arg(getName()),
         m_buffer.isFileBacked() ? tr("Note path (%1).").arg(m_buffer.resolvedPath()) : QString());
     switch (ret) {
     case QMessageBox::Save:
@@ -1984,7 +1999,7 @@ void ViewWindow2::discardChangesAndRead() {
   if (isModified()) {
     // Ask to save changes.
     int ret = questionSaveOrDiscard(
-        this, tr("Discard changes to note (%1)?").arg(getName()),
+        tr("Discard changes to note (%1)?").arg(getName()),
         m_buffer.isFileBacked() ? tr("Note path (%1).").arg(m_buffer.resolvedPath()) : QString());
     switch (ret) {
     case QMessageBox::Save:

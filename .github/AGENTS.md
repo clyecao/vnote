@@ -318,6 +318,16 @@ only the exact signed DMG for reproduction, never adjacent certificates/keychain
 directory. It is diagnostic-only, not a release. Do not mask the timeout, force-unmount a busy
 package, or move SSH sessions past signing-secret provisioning.
 
+Both ARM and Intel package gates mount through `.github/scripts/mount-macos-package.py`.
+Only the exact `hdiutil: attach failed - Resource temporarily unavailable` error may retry:
+three attach attempts maximum, with 2s/4s backoff and a 60s limit per attach. Before the first
+attempt and after failures, bounded `hdiutil info -plist` must prove the exact image is absent.
+Existing/partial attachments, occupied mountpoints, ambiguous state, timeouts and other errors
+fail closed without force-detach. The helper creates the mountpoint; the caller retains the
+successful mount's EXIT detach trap. Preserve each attempt's output/status and attachment state
+under `RUNNER_TEMP/vnote-package-diagnostics`, including recovered attempts on both architectures.
+This does not retry runtime gates or establish the cause of the transient resource conflict.
+
 ## macOS runtime composition
 
 Run `package/prune-macos-package.cmake` with `VNOTE_APP_DIR` after each deployment
@@ -409,19 +419,22 @@ new for each installer build. The application retains VNote's existing user data
 ## Update artifacts
 
 Ordinary startup/manual checks remain metadata-only and read-only for the installation;
-`UpdateService` ignores assets. The sole installation entry point is the explicit Windows
-`Update Now` notification action launching the deployed external PowerShell updater, not an
-in-process installer or a manual-dialog action. The script consumes signed **full packages
-only**, with no unsigned or cross-source fallback. See
+`UpdateService` ignores assets. Installation requires an explicit Windows `Update Now` action
+from the startup notification or manual-check dialog, launching the deployed external PowerShell
+updater, never an in-process installer. Keep the release-page alternative and disclose downloading,
+closing and reopening VNote; checks never launch the helper themselves. The script verifies signed
+full packages or reconstructs complete payloads from eligible deltas, with no unsigned or
+cross-source fallback. See
 [../docs/update-signing.md](../docs/update-signing.md) and root
 [AGENTS.md § Update Check](../AGENTS.md#update-check).
 
 On the existing `[Release]` master-push condition, `win64` must publish a ZIP,
-`.manifest.json` and `.manifest.json.minisig`. Retain optional delta publication,
-although this updater never consumes deltas. Preserve the stable-channel and
+`.manifest.json` and `.manifest.json.minisig`. Retain optional delta publication
+for the external updater. Preserve the stable-channel and
 artifact-list gates. Missing `MINISIGN_SECRET_KEY` must fail release signing, and
-secret files stay outside the workspace. Missing Gitee mirrors fail closed at
-runtime; never switch the user's source to GitHub.
+secret files stay outside the workspace. Missing required Gitee assets fail closed;
+an absent eligible delta may select the same signed full package as documented above.
+Never switch the user's source to GitHub.
 
 `prepare_win_updater` must run `package/prepare-win-updater.cmake` with
 `UPDATER_OUTPUT_DIR=<build>/src/win-updater` as a **deploy-only prerequisite**: no network on

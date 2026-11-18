@@ -25,19 +25,16 @@ struct UpdateInfo {
   QString currentVersion;
   QString latestVersion;
 
-  // Release notes body and the human-facing release page, from the release API.
+  // Optional Markdown release notes and the human-facing release page.
   QString releaseNotes;
   QString releaseUrl;
 };
 
 // Checks the selected forge for a newer release and reports what it found.
 //
-// That is the ENTIRE feature. VNote does not download, extract, execute,
-// install or restart-to-apply anything, and it never writes outside its own
-// configuration directory; when an update exists the user is sent to the
-// release page to fetch it themselves. Do not reintroduce a downloader here
-// without revisiting the "VNote never modifies its own install directory"
-// invariant in the root AGENTS.md.
+// Only release metadata is fetched, in memory. This service never downloads
+// release artifacts, writes files or installs anything; installation belongs
+// exclusively to the explicit external updater. See the root update contract.
 //
 // Deliberately does NOT depend on ConfigMgr2: core_configs links core_services,
 // so the dependency would be circular. The installed version is injected, and
@@ -59,9 +56,6 @@ public:
   static const QStringList &allowedHosts(Source p_source);
   static constexpr int c_maxRedirects = 5;
 
-  // Cap on an API response body, enforced WHILE the body arrives.
-  static constexpr qint64 c_maxApiResponseBytes = 16LL * 1024 * 1024;
-
   explicit UpdateService(const QString &p_currentVersion, QObject *p_parent = nullptr);
   ~UpdateService() override;
 
@@ -81,8 +75,8 @@ public:
   // Test seams (unconditional, per ADR-6)
   // ---------------------------------------------------------------------
 
-  // Redirects the release API at a local server. Empty restores production.
-  void testSetEndpointOverride(const QUrl &p_apiLatestUrl);
+  // Redirects latest-release discovery at a local server. Empty restores production.
+  void testSetEndpointOverride(const QUrl &p_latestReleaseUrl);
 
   // Allows the override host through the allowlist. Only ever set alongside
   // testSetEndpointOverride.
@@ -117,25 +111,14 @@ private:
   // is deliberately no QNetworkAccessManager member.
   bool isHostAllowed(const QUrl &p_url) const;
 
-  // Synchronous GET with redirect following, host allowlist, and a hard byte
-  // cap that ABORTS the reply the moment it is crossed. Runs on a WORKER thread
-  // only (it spins a nested event loop).
-  bool fetchToMemory(QNetworkAccessManager &p_nam, const QUrl &p_url, QByteArray *p_out,
-                     QString *p_error, qint64 p_maxBytes = c_maxApiResponseBytes);
+  // HEAD-only discovery on a worker. Stop at a validated stable tag redirect;
+  // never request the tag page or an asset.
+  bool findLatestRelease(QNetworkAccessManager &p_nam, UpdateInfo *p_info, QString *p_error);
 
-  // Entry point of the release metadata API for the current source.
-  QUrl apiLatestUrl() const;
+  // Optional, bounded metadata GET after discovery, only when an update is available.
+  QString fetchReleaseNotes(QNetworkAccessManager &p_nam, const UpdateInfo &p_info);
 
-  // Human-facing release page for p_tag.
-  //
-  // GitHub supplies html_url in the API response, but it is used only when it
-  // is a valid URL on an allowlisted host (it is handed to QDesktopServices);
-  // otherwise it falls back to a synthesized tag URL. Gitee supplies no
-  // html_url at all, so the page is always synthesized as
-  // https://gitee.com/vnotex/vnote/releases/tag/v<tag> (verified against the
-  // live v4.3.0 page -- the `tag/` segment is NOT present in the asset download
-  // path).
-  QString releasePageUrl(const QString &p_tag, const QString &p_htmlUrlFromApi) const;
+  QUrl latestReleaseUrl() const;
 
   void reportFailure(const QString &p_message);
 
@@ -165,7 +148,7 @@ private:
   QMutex m_workerMutex;
   QVector<QFuture<void>> m_workers;
 
-  QUrl m_apiLatestOverride;
+  QUrl m_latestReleaseOverride;
   QString m_extraAllowedHost;
 };
 

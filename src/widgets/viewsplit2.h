@@ -6,6 +6,7 @@
 #include <QString>
 #include <QStringList>
 #include <QTabWidget>
+#include <QTimer>
 #include <QVector>
 #include <functional>
 
@@ -15,6 +16,7 @@
 class QActionGroup;
 class QToolButton;
 class QMenu;
+class QWheelEvent;
 
 namespace vnotex {
 
@@ -42,8 +44,9 @@ public:
   // @p_workspaceId: vxcore workspace ID this split is mapped to.
   // @p_parent: Parent widget (optional).
   // @p_detached: When true this split lives inside a DetachedWindow. Its corner
-  //   widget replaces the "Open Windows"/"Menu" buttons with a single checkable
-  //   "Stay on Top" pin, it installs no split/workspace/tab shortcuts, and its tab
+  //   widget replaces the "Open Windows"/"Menu" buttons with a checkable
+  //   "Stay on Top" pin and "Attach to Main Window" button. It installs no
+  //   split/workspace/tab shortcuts, and its tab
   //   context menu exposes only Copy Path / Open Location / Reload / Auto Reload.
   explicit ViewSplit2(ServiceLocator &p_services, const QString &p_workspaceId,
                       QWidget *p_parent = nullptr, bool p_detached = false);
@@ -180,6 +183,9 @@ signals:
   // Carries the requested state; the hosting DetachedWindow applies it.
   void stayOnTopToggled(bool p_enabled);
 
+  // Detached splits only: move all hosted views back to the current main split.
+  void attachToMainWindowRequested();
+
 protected:
   void mousePressEvent(QMouseEvent *p_event) override;
 
@@ -194,7 +200,9 @@ private slots:
 private:
   void setupUI();
   void setupTabBar();
+  void scrollTabBar(QWheelEvent *p_event);
   void setupCornerWidget();
+  void updateCornerButtonsVisibility();
   void setupShortcuts();
   void updateShortcutAvailability(QWidget *p_focusWidget);
 
@@ -243,11 +251,18 @@ private:
   ViewWindow2 *m_currentViewWindow = nullptr;
   ViewWindow2 *m_lastViewWindow = nullptr;
 
+  // Sub-step wheel input is local to this strip, never the active document.
+  int m_tabWheelRemainder = 0;
+  bool m_tabWheelUsesPixels = false;
+
   // Corner widget buttons.
   QToolButton *m_windowListButton = nullptr;
   QToolButton *m_menuButton = nullptr;
-  // Detached splits only: checkable "Stay on Top" pin.
+  // Detached splits only: pin and attach actions.
   QToolButton *m_stayOnTopButton = nullptr;
+  QToolButton *m_attachToMainWindowButton = nullptr;
+
+  QTimer m_cornerVisibilityTimer;
 
   // Action groups for menu items (lazy-initialized).
   QActionGroup *m_windowListActionGroup = nullptr;
@@ -261,6 +276,9 @@ private:
   QIcon m_menuIcon;
   QIcon m_menuActiveIcon;
   QIcon m_stayOnTopIcon;
+  QIcon m_stayOnTopActiveIcon;
+  QIcon m_attachToMainWindowIcon;
+  QIcon m_attachToMainWindowActiveIcon;
 
   // Pen-off badge shown on the left of the tab title when the tab's buffer
   // belongs to a read-only notebook (see effectiveTabIcon()).

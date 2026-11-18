@@ -6,9 +6,10 @@
 #include <QKeySequence>
 #include <QVersionNumber>
 
+#include <algorithm>
+
 #include "coreconfig.h"
 #include "editorconfig.h"
-#include "httpapiconfig.h"
 #include "iconfigmgr.h"
 #include "markdowneditorconfig.h"
 #include "mindmapeditorconfig.h"
@@ -36,7 +37,6 @@ MainConfig::MainConfig(IConfigMgr *p_mgr) : IConfig(p_mgr, nullptr) {
   m_childConfigs[ChildConfigIndex::CoreConfigIndex].reset(new CoreConfig(p_mgr, this));
   m_childConfigs[ChildConfigIndex::EditorConfigIndex].reset(new EditorConfig(p_mgr, this));
   m_childConfigs[ChildConfigIndex::WidgetConfigIndex].reset(new WidgetConfig(p_mgr, this));
-  m_childConfigs[ChildConfigIndex::HttpApiConfigIndex].reset(new HttpApiConfig(p_mgr, this));
 }
 
 MainConfig::~MainConfig() {}
@@ -45,7 +45,6 @@ void MainConfig::fromJson(const QJsonObject &p_jobj) {
   // p_jobj MUST already be merged (defaults + user overrides). ConfigMgr2::init() guarantees
   // this by applying the user's document as an RFC 7386 merge patch on top of the defaults;
   // most children map an absent key to false/0/"", so raw input would wipe defaults.
-  // HttpApiConfig instead retains missing/malformed fields as an invalid configuration.
   loadMetadata(p_jobj);
 
   for (auto &childConfig : m_childConfigs) {
@@ -105,10 +104,6 @@ EditorConfig &MainConfig::getEditorConfig() {
 
 WidgetConfig &MainConfig::getWidgetConfig() {
   return *static_cast<WidgetConfig *>(m_childConfigs[ChildConfigIndex::WidgetConfigIndex].data());
-}
-
-HttpApiConfig &MainConfig::getHttpApiConfig() {
-  return *static_cast<HttpApiConfig *>(m_childConfigs[ChildConfigIndex::HttpApiConfigIndex].data());
 }
 
 void MainConfig::update() { getMgr()->updateMainConfig(toJson()); }
@@ -177,6 +172,29 @@ void MainConfig::doVersionSpecificOverride(const QString &p_previousVersion) {
   if (QVersionNumber::fromString(p_previousVersion) < c_pdfJsV6Version) {
     auto &pdfConfig = getEditorConfig().getPdfViewerConfig();
     pdfConfig.m_viewerResource = PdfViewerConfig::defaultViewerResource();
+  }
+
+  // Profiles through 4.14.0 keep their saved alias array instead of new defaults.
+  // Include 4.14.0 when its next version change reaches this hook. Preserve custom
+  // definitions and a blanket opt-out; individual deletions cannot be distinguished
+  // from aliases that an older release never supplied.
+  static const QVersionNumber c_unitedEntryAliasesVersion(4, 14, 1);
+  if (QVersionNumber::fromString(p_previousVersion) < c_unitedEntryAliasesVersion) {
+    auto &coreConfig = getCoreConfig();
+    auto aliases = coreConfig.getUnitedEntryAlias();
+    if (!aliases.isEmpty()) {
+      for (const auto &alias : CoreConfig::defaultUnitedEntryAliases()) {
+        const auto name = alias.toObject().value(QStringLiteral("name")).toString();
+        const bool exists = std::any_of(
+            aliases.constBegin(), aliases.constEnd(), [&name](const QJsonValue &p_alias) {
+              return p_alias.toObject().value(QStringLiteral("name")).toString() == name;
+            });
+        if (!exists) {
+          aliases.append(alias);
+        }
+      }
+      coreConfig.setUnitedEntryAlias(aliases);
+    }
   }
 }
 

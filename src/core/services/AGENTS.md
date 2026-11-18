@@ -53,6 +53,30 @@ installation; loading is not deferred until the dock becomes visible.
 Coverage: `tests/core/test_taskservice.cpp` (late installation, cached empty results,
 explicit reload, and notebook/context changes).
 
+## Notebook task trust
+
+`TaskService::runTask()` is the only task-launch entry point. Notebook tasks carry their
+load-time notebook ID and task-folder provenance; unknown tasks or stale/closed/switched
+origins cannot run. Keep the owning root alive through confirmation and execution. Recheck
+context, cache membership and folder identity after the modal loop, before saving approval.
+Neither task JSON scope nor the execution-time current notebook alone can authorize a task.
+
+Untrusted notebook tasks request `ITaskContext::confirmNotebookTrust()` before command,
+cwd, argument, input or authored shell-variable evaluation. The widget adapter shows a
+plain-text warning with Cancel as default and Escape action; it never writes trust.
+Approval must persist through `NotebookCoreService` before launch; save failure blocks the
+process and reports to task output. App-task definitions do not require notebook consent.
+
+Approval lives only in local `vxsession.json` opened-notebook records: ordinary restarts
+retain it; successful explicit notebook close forgets it. Only explicit New Notebook and a
+fresh first-run bundled copy start trusted. Generic create/open, existing first-run roots,
+remote clones and VNote3 imports never grant approval. A creation-time trust-save failure
+retains the successfully created notebook as untrusted and logs a warning.
+
+Coverage: `test_taskservice` exercises pre-evaluation denial, reentrant invalidation,
+persistence failures and process lifetime; `test_notebooktasktrust` drives the production
+modal and real child processes through both service and controller routes.
+
 ## Task command/data boundary
 
 Shell tasks keep `command` and `options.shell` **static**. `Task::setupProcess()` rejects
@@ -90,7 +114,7 @@ shell quotes around an args value. For example, migrate `"command": "echo ${buff
   descriptions/defaults are separately authored templates. Custom tasks relying on recursive
   expansion must put those variables directly in the task template instead.
 
-This is not a sandbox or notebook trust mechanism. Run only trusted task definitions.
+The argument boundary is not a sandbox; notebook consent is enforced separately above.
 Explicit shell execution, `eval`, `Invoke-Expression`, and passing data as an interpreter's
 script are still execution chosen by the task author. Do not turn literal args back into code.
 Regression coverage: `tests/core/test_taskservice.cpp` executes real shells and a native
@@ -251,6 +275,57 @@ Save workers and sync preparation share `NotebookIoGate` per notebook. Git relea
 
 Performance instrumentation: the Qt logging category `vnote.perf.save` covers UI-thread enqueue + worker save latency, and vxcore emits `VXCORE_LOG_DEBUG` lines tagged `[perf.mark_dirty]` / `[perf.maybe_enqueue]` for the synchronous tail that still runs on the caller thread. Both are off by default; enable them when chasing UI-thread regressions.
 
+### Snapshot provenance and ordinary manual saves
+
+`registerSnapshotWriter(bufferId, owner, writerKey, knownBaseRevision)` gives a view a
+monotonic opaque token for that QObject lifetime **and buffer binding**. Revoke it on
+replacement with `revokeSnapshotWriter()`. Focus changes still use the existing active-writer
+registration; they do not retire this descriptor. The GUI-only base getter is sampled only
+for actual service captures. Observational `getLatestContent()` / `captureActiveWriterContent()`
+calls do not create provenance, and matching text never authorizes a foreign revision.
+
+Ordinary queue jobs carry `BufferSnapshotContext` (token, live buffer epoch, expected core
+base, editor revision). Pending/running ownership is published before worker dispatch.
+`IBufferCoreService::saveSnapshot()` is the single ordinary worker attempt; its unowned default
+retains raw install/save behavior for core-only consumers. BufferService admits a registered
+capture only at its exact expected base, or through an unbroken same-token chain ending at the
+actual current core revision with a **strictly newer** editor revision. Unknown/foreign/token-zero
+changes break the chain, including same-text installs. Newer edits and undo can continue an own
+chain without loading an older worker body. A failed disk write still publishes installed-byte
+ownership, but never durability. Records retain only bounded metadata, not editor strings.
+Close/prune retires the epoch, and a late worker cannot recreate its publication entry.
+
+`snapshotPublication(id, token)` returns `live`, the last safely published `coreRevision`,
+`writerToken`, `editorRevision`, `chainStartRevision`, `durable`, and ordinary queue
+`busy`/`ownPending`/`foreignPending` facts. Query this **before** reading raw core content.
+`getRevision()` uses these published facts while ordinary work is active; idle revision gaps
+are reconciled as foreign. `bufferPublicationChanged(id)` wakes generation-guarded GUI refresh
+or save waiters after publication/queue-state changes. It is not a durability receipt itself.
+
+`saveFinished` remains request settlement: a coalesced request may settle successfully without
+any write. The separate `snapshotFinished` reports only real attempts/admission failures;
+BufferService's saved-revision accounting uses actual results, never coalesced settlement.
+Both GUI `saveBuffer` overloads join an already admitted snapshot of the requested revision,
+including an earlier autosave after dirty was cleared. A same-owner/revision duplicate joins
+that snapshot. If a newer revision is requested while busy, capture the active writer, never
+old raw bytes. Idle unregistered/binary saves queue immutable raw bytes without text conversion.
+The bounded event-driven wait acknowledges only actual durability with the same editor revision
+and binding. An ordinary re-save requires a receipt newer than its captured core base; a prior
+durable receipt cannot acknowledge a new write. An earlier queued failure does not settle a
+still-pending retry of that snapshot. Newer edits, retirement, actual failure or timeout return
+false. Workers never enter this GUI capture/wait path.
+
+Memory backing callbacks use immutable save handles. A successful completion may have no core
+revision delta: publish durability only for its captured core revision, and never attach that
+older completion to a newer current origin. Newer memory edits remain available during the callback.
+
+Ordinary raw/JSON replacement, reload, active-writer pull, None/Backup sync and `saveForSnapshot`
+refuse while an ordinary job is pending/running; manual saves use the join path above. Raw getters fail
+rather than expose concurrently changing storage. No GUI mutex wait spans disk IO. Protected
+leases/encryption and memory's immutable callback executor keep their separate existing paths.
+Coverage: real service and worker-gated cases in `test_buffer`, plus real-core queue
+coalescing/attempt/raw-byte cases in `test_buffer_save_queue`.
+
 ### External-change detection gate (false-positive defense)
 
 VNote detects files modified on disk by external tools via polling, NOT a `QFileSystemWatcher` (no watcher observes open buffers; the only `QFileSystemWatcher` instances watch the theme dir and the notebook tree). `ViewAreaController` runs a 2 s `QTimer` that checks the ACTIVE buffer (`checkSingleExternalChange`) plus a full sweep of ALL buffers on app re-focus (`checkAllExternalChanges`). The check chain is `BufferService` → `BufferCoreService::checkExternalChanges` → `vxcore_buffer_check_external_changes` → `vxcore::Buffer::CheckExternalChanges`.
@@ -403,25 +478,25 @@ former. Regression coverage is in `test_buffer` and `test_buffer_save_queue`.
 
 ## UpdateService
 
-Mechanism half of the update check: the release API, the source-scoped host allowlist,
-manual redirect walking, the response cap and cancellation. The full contract (source
-selection, ordinary checks' read-only-install invariant, and the separate explicit Windows
+Mechanism half of the update check: website HEAD discovery, optional release notes,
+exact-origin redirect validation and cancellation. The full contract (source selection, ordinary checks'
+read-only-install invariant, and the separate explicit Windows
 external-updater boundary) lives in [Update Check](#update-check) below; only the
 service-specific rules are repeated here.
 
 ### It is a CHECK, and only a check
 
-`UpdateService` fetches ONE JSON document and reports what it says. It has no install
-directory, no download directory, no staging directory, no lease, no notion of "applying"
-anything, and it writes nothing to disk. `UpdateInfo` carries exactly `updateAvailable`,
-`currentVersion`, `latestVersion`, `releaseNotes` and `releaseUrl`.
+`UpdateService` sends HEAD to the selected website's latest-release URL and identifies the
+version from a validated tag redirect. For a newer release it then fetches optional notes
+from the selected source's public metadata endpoint; equal/older releases stay HEAD-only.
+It never requests that tag URL, an API endpoint or an asset. There is no API fallback or
+token requirement. It has no install/download/staging directory, lease or installation
+operation, and writes nothing to disk. `UpdateInfo` keeps `updateAvailable`, `currentVersion`,
+`latestVersion`, optional Markdown `releaseNotes` and `releaseUrl`.
 
-The release's `assets[]` array is **ignored entirely**: no asset name is matched, no
-`browser_download_url` is read, and no asset is ever requested. Do not add an install-dir
-or download-dir parameter back, and do not reintroduce asset selection — the absence of both
-is what fixes issue #2728 and what keeps this service free of a whole class of
-file-ownership races. `testAssetsAreIgnoredEntirely` and `testTheCheckWritesNothingToDisk`
-are the gates.
+Do not add install/download-directory parameters or asset selection. This keeps read-only
+installations usable (issue #2728) and avoids file-ownership races.
+`testDiscoveryDoesNotFollowTagOrReadBody` and `testTheCheckWritesNothingToDisk` guard that boundary.
 
 ### No ConfigMgr2 dependency
 
@@ -451,21 +526,41 @@ selects GitHub; empty, absent and unrecognized values are Gitee. This mirrors
 
 | | GitHub | Gitee |
 |---|---|---|
-| `apiLatestUrl()` | `https://api.github.com/repos/vnotex/vnote/releases/latest` | `https://gitee.com/api/v5/repos/vnotex/vnote/releases/latest` |
+| HEAD discovery | `https://github.com/vnotex/vnote/releases/latest` | `https://gitee.com/vnotex/vnote/releases/latest` |
+| Notes GET | `https://github.com/vnotex/vnote/releases.atom` | `https://gitee.com/vnotex/vnote/releases` |
 | `releasesPageUrl()` | `https://github.com/vnotex/vnote/releases` | `https://gitee.com/vnotex/vnote/releases` |
-| `releasePageUrl(tag, htmlUrl)` | the API's `html_url`, but ONLY when it is a valid URL on an allowlisted host — it is handed straight to `QDesktopServices` and `UpdateDialog` has no empty-URL branch, so an absent/off-forge/plain-http value would render a dead (or hostile) button. Otherwise a `<releasesPageUrl>/tag/v<tag>` URL is synthesized | always synthesized `<releasesPageUrl>/tag/v<tag>` — Gitee's release JSON has no `html_url`. Verified against the live `https://gitee.com/vnotex/vnote/releases/tag/v4.3.0`; the `tag/` segment is NOT present in the asset download path, so do not "simplify" the two to share a base |
-| `Accept` | `application/vnd.github+json, */*` | `application/json, */*` (Gitee rejects the vendor type) |
+| Result `releaseUrl` | `<releasesPageUrl>/tag/v<version>` | `<releasesPageUrl>#release-v<version>` |
+| Exact production host | `github.com` | `gitee.com` |
 
-`m_apiLatestOverride` (the test seam) covers the API entry point, which is the only URL the
-service ever requests.
+Both latest endpoints were verified to return a tag redirect for v4.14.1. Gitee's tag URL
+then redirects to a source archive: stop at the tag Location, and use the public release
+list's `release-v<version>` anchor for the human-facing button instead. Never pass Gitee's
+raw tag Location to `QDesktopServices`. The synthesized button fragment is not a request URL.
+
+GitHub notes select the Atom entry whose alternate link exactly matches the discovered
+tag's release URL; feed order and `continuous-build` must not select the version. HTML
+content is converted to Markdown. Gitee notes select the exact `data-tag` within a
+`release-tag-item`, then decode its embedded Markdown textarea once, preserving raw tags,
+entities and whitespace without borrowing the next release's text. Gitee's advertised
+Atom endpoint is not used (it returns 404). Both sources were exercised against v4.14.4.
+`QTextDocument` conversion disables resource loading: notes may not load local files,
+images or stylesheets. It needs a `QGuiApplication`, not QtWidgets or VTextEdit.
+
+`m_latestReleaseOverride` and `testSetExtraAllowedHost` nominate only the local fixture's
+exact origin, including scheme and port; notes paths use that same origin, and an override
+does not also allow production hosts.
 
 ### Outcomes, and who owns a result
 
-A release whose `tag_name` is missing or empty is a `failed()` — the check genuinely could
-not be performed. Everything else is a `checkFinished()`, including "you are up to date":
-`updateAvailable` is simply `latest > current` under `QVersionNumber`, and `latestVersion` /
-`releaseUrl` are populated either way so a manual check can say "up to date" and still link
-the page.
+During discovery, a missing, invalid or non-stable tag redirect, unexpected status
+(including 200, 403 or 429) or network error emits `failed()`, never an "up to date" result.
+Missing, malformed, oversized, timed-out or failed optional notes leave the version result
+successful with empty notes and a usable release-page link. Explicit cancellation during
+either phase still emits `failed()`.
+A validated numeric three-component tag emits `checkFinished()` with `latestVersion`
+without the `v` prefix and a canonical source-specific `releaseUrl`.
+`updateAvailable` is `latest > current` under `QVersionNumber`; equal and older versions
+are successful checks with no update offer.
 
 **`checkForUpdates()` returns `bool`: whether the request was ACCEPTED.** A call made while
 another check is in flight is dropped and returns `false`, emitting nothing. This return
@@ -483,7 +578,7 @@ where the result and its mode are known to belong together.
 ### Threading
 
 `checkForUpdates()` returns immediately and does its work on a `QtConcurrent` worker,
-because `fetchToMemory()` blocks on a nested event loop.
+because `findLatestRelease()` blocks on a nested event loop.
 
 - **`QNetworkAccessManager` is created on the WORKER'S STACK**, never as a member. QNAM is
   not thread-safe and belongs to the thread that created it, so every network helper takes
@@ -503,23 +598,24 @@ because `fetchToMemory()` blocks on a nested event loop.
   `this`. `m_workers` is guarded by `m_workerMutex`, snapshotted under the lock and waited on
   OUTSIDE it.
 
-### Redirects, the response cap and the host allowlist
+### Redirect and request boundary
 
-Redirects are followed MANUALLY (`QNetworkRequest::ManualRedirectPolicy` set on EVERY
-request, overriding Qt 6's default redirect following) so each hop can be checked. At most
-`c_maxRedirects` hops, and there is no HTTPS -> HTTP downgrade path.
+Every request uses `ManualRedirectPolicy`. Accept only 301, 302, 303, 307 and 308 redirects,
+with at most `c_maxRedirects` hops per phase. Production URLs require the selected exact website
+host, HTTPS on port 443 (including an omitted default port), and no userinfo, query or
+fragment. API hosts, asset CDNs, subdomain suffixes and cross-source redirects are rejected.
+HEAD discovery requests only `/vnotex/vnote/releases/latest` and its trailing-slash form.
 
-`allowedHosts(Source)` is **source-scoped and disjoint**, so a client on one forge can never
-follow a redirect onto the other's hosts:
+A redirect to `/vnotex/vnote/releases/tag/v<version>` completes discovery without another
+request. Parse the entire numeric version with exactly three components; reject suffixes,
+overflow, other repositories, archive/download/login paths and malformed URLs. HEAD must
+complete from headers alone even when `Content-Length` describes a large GET body.
 
-- GitHub: exact `api.github.com`, `github.com`, `codeload.github.com`, plus any host under
-  `.githubusercontent.com`.
-- Gitee: exact `gitee.com`, plus any host under `.gitee.com`.
-
-`fetchToMemory()` enforces `c_maxApiResponseBytes` by accumulating on `readyRead` and
-`abort()`ing the reply the moment the cap is crossed — NOT by buffering the whole body and
-rejecting afterwards, which a server declaring a huge `Content-Length` could turn into an
-unbounded allocation or a full-timeout stall.
+The optional notes GET requests only the selected source's notes endpoint above (or its
+trailing-slash form), including every redirect. It cannot follow a tag/archive/asset URL.
+A 2 MiB streaming response cap applies even without `Content-Length`, with a 10-second
+aggregate network deadline across redirects. Conversion stays in memory; no disk cache,
+source fallback or external resource request is introduced.
 
 Cancellation is POLLED every 250 ms inside the blocking request, because
 `QNetworkReply::abort()` must run on the reply's own thread; without the poll, closing VNote
@@ -528,23 +624,26 @@ for the whole 60 s timeout.
 
 `testSetEndpointOverride` / `testSetExtraAllowedHost` exist for the local server harness in
 `tests/core/test_updateservice.cpp`; the plain-HTTP exemption they enable applies ONLY to the
-explicitly nominated host, and it is independent of the source.
+explicitly nominated origin, and it is independent of the source.
 
 ### Test coverage
 
 `tests/core/test_updateservice.cpp` drives the REAL `QNetworkAccessManager` against a local
-`QTcpServer`. Two properties look incidental and are not, so please do not "simplify" them
-away:
+`QTcpServer`. Preserve these behavioral boundaries:
 
-- `testOversizedApiResponseAbortsTheReply` serves a response declaring an 8 GB
-  `Content-Length` and never closes the socket. It passes only if the cap ABORTS mid-stream;
-  a buffer-then-reject implementation would hang until the 60 s request timeout.
+- `testDiscoveryDoesNotFollowTagOrReadBody` serves HEAD headers declaring an 8 GB GET body and leaves
+  the socket open. Both sources must complete without waiting for a body or requesting the
+  tag URL, which the fixture redirects to an archive as Gitee does.
 - `testTheCheckWritesNothingToDisk` redirects the process working directory into a scratch
-  tree, snapshots both it and the user's real Downloads folder around a check whose release
-  object DOES carry `assets[]`, and asserts both trees are unchanged and that no asset /
-  manifest / signature path was ever requested. That is the feature's central invariant
-  expressed as a test; the CWD redirect is what catches a regression writing to a relative
-  path.
+  tree and snapshots it and the user's Downloads folder. Both must remain unchanged, with
+  no asset, manifest or signature request; the CWD catches relative-path writes.
+- Real-socket regressions cover both sources, accepted redirect statuses, malformed or
+  cross-origin targets, failed HTTP statuses without fallback, relative canonicalization,
+  redirect bounds, cancellation and ownership of in-flight checks. Notes regressions cover
+  exact-version selection in both formats, Unicode/entities/raw tags, absent or malformed
+  notes, streaming overflow, safe GET redirects, and cancellation during notes retrieval.
+  Equal/older releases must never request notes. No configuration migration is needed:
+  source ownership, saved preferences and update-check policy are unchanged.
 
 ### NotificationService fields consumed by UpdateController
 
@@ -668,9 +767,10 @@ This mirrors the vxcore/VNote ownership split used by sync: vxcore emits per-fil
 > [UpdateService](#updateservice) above are the service-scoped subset of this section.
 
 Ordinary startup and manual checks fetch release metadata and offer the **release page**.
-They do not install anything. Only explicit activation of the Windows notification's
-`Update Now` action may launch the deployed external script; the manual-check dialog stays
-unchanged. The exception adds no installation behavior to `UpdateService` or `UpdateInfo`.
+They do not install anything. Only explicit activation of Windows' `Update Now` action in
+the startup notification or manual-check dialog may launch the deployed external script.
+Both keep a release-page alternative. The exception adds no installation behavior to
+`UpdateService` or `UpdateInfo`.
 
 > **An ordinary check never modifies the install directory or downloads release artifacts.**
 > It creates no lease, staging tree or journal, and extracts or executes nothing. Its only
@@ -679,7 +779,8 @@ unchanged. The exception adds no installation behavior to `UpdateService` or `Up
 
 The removed C++ installer, delta chains, `UpdateInstaller`, `UpdateLease`, `ZipExtractor`
 and vendored `miniz` / `minicrypto` must not return. The external Windows updater is a
-separate process consuming signed **full packages only**, with no unsigned/source fallback.
+separate process verifying signed full packages or reconstructing eligible deltas,
+with no unsigned/source fallback.
 Its authenticated, launch-scoped graceful-close handshake must receive explicit acceptance
 and wait for full original-process exit before replacement. It must preserve portable
 `config` and unowned files, retain a complete backup, and fail with manual-update guidance
@@ -691,11 +792,11 @@ for authentication/replacement requirements and
 
 | Layer | Unit | Responsibility |
 |---|---|---|
-| Service | [`UpdateService`](updateservice.h) | release API, per-source endpoints/headers, manual redirect walking, source-scoped host allowlist, response cap, cancellation, worker lifetime |
+| Service | [`UpdateService`](updateservice.h) | website HEAD discovery, optional bounded notes, validated redirects, exact source origins, cancellation, worker lifetime |
 | Controller | [`UpdateController`](../../controllers/updatecontroller.h) | ALL policy: configured source, 24 h throttle, skipped version, manual-vs-startup surface, failure loudness; explicit Windows helper launch and authenticated shutdown session |
-| View | [`UpdateDialog`](../../widgets/dialogs/updatedialog.h) | version, notes, Open Release Page / Skip This Version / Later |
+| View | [`UpdateDialog`](../../widgets/dialogs/updatedialog.h) | version, optional read-only Markdown notes, Open Release Page / Skip This Version / Later, explicit Windows-only Update Now intent |
 | View | [`NotificationPopup2`](../../widgets/notificationpopup2.h) | the startup surface: one persistent, interrupting "Update Available" row with Check Release first and Windows-only Update Now |
-| External process | `scripts/update-vnote.ps1` (deployed under `updater/`) | exact-tag asset selection, signed full-package verification, safe replacement/backup and same-token relaunch after accepted shutdown |
+| External process | `scripts/update-vnote.ps1` (deployed under `updater/`) | exact-tag asset selection, signed full-package verification or eligible-delta reconstruction, safe replacement/backup and same-token relaunch after accepted shutdown |
 
 `UpdateService` deliberately does NOT depend on `ConfigMgr2`: `core_configs` links
 `core_services`, so the reverse dependency would be circular. The installed version is
@@ -703,9 +804,10 @@ injected and every config-dependent decision lives in `UpdateController`, which 
 configured source down via `setSource()`.
 
 `UpdateInfo` carries exactly `updateAvailable`, `currentVersion`, `latestVersion`,
-`releaseNotes` and `releaseUrl`. During an ordinary check, the release's `assets[]` array is
-**ignored entirely** — no asset is selected and no asset URL is ever requested
-(`testAssetsAreIgnoredEntirely` pins this).
+`releaseNotes` and `releaseUrl`. Notes are optional Markdown obtained only from the
+selected source's bounded metadata GET; no `assets[]` array is read. No asset is selected
+and neither a tag page nor an asset URL is requested
+(`testDiscoveryDoesNotFollowTagOrReadBody` guards this).
 
 `checkForUpdates()` returns whether the request was ACCEPTED (a call made during another
 check is dropped and returns `false`). `UpdateController` sets its manual-vs-startup mode
@@ -724,17 +826,11 @@ case-insensitive `"github"`, and `"gitee"` for empty, absent or unrecognized val
 it already had** (in practice GitHub); only fresh installs and hand-cleared configs get the
 new default. No migration is performed.
 
-| | GitHub | Gitee |
-|---|---|---|
-| latest-release API | `https://api.github.com/repos/vnotex/vnote/releases/latest` | `https://gitee.com/api/v5/repos/vnotex/vnote/releases/latest` |
-| `Accept` header | `application/vnd.github+json, */*` | `application/json, */*` |
-| release page | the API's `html_url`, validated against the allowlist first (it is handed to `QDesktopServices`); an absent, malformed or off-forge value falls back to a synthesized `<releases>/tag/v<tag>` | synthesized `https://gitee.com/vnotex/vnote/releases/tag/v<tag>` (Gitee's JSON has no `html_url`; the pattern is verified against the live v4.3.0 page, and note the `tag/` segment the asset download path does **not** have) |
-| host allowlist | exact `api.github.com`, `github.com`, `codeload.github.com` + suffix `.githubusercontent.com` | exact `gitee.com` + suffix `.gitee.com` |
-
-The allowlists are **disjoint and source-scoped**: a client on one source must never follow
-a redirect to the other's hosts. Redirects are followed MANUALLY
-(`QNetworkRequest::ManualRedirectPolicy` set on EVERY request, overriding Qt 6's default
-redirect following), at most `c_maxRedirects` hops, with no HTTPS→HTTP downgrade.
+Both sources use their website's latest-release HEAD redirect, not REST APIs. See
+[Per-source endpoints](#per-source-endpoints) for the endpoint and human-facing URL
+contracts and [Redirect and request boundary](#redirect-and-request-boundary) for validation.
+Website throttling remains possible, but REST API quotas are not used by ordinary checks.
+The external Windows updater is separate: its Gitee asset discovery still uses the API.
 
 ### Update check threading
 
@@ -755,9 +851,8 @@ because it blocks on a nested event loop.
   stored `QFuture` could be replaced while the previous worker was still unwinding.
 - Cancellation is POLLED every 250 ms inside a blocking request so service teardown is never
   blocked for the full request timeout.
-- The API response cap **aborts** the reply mid-stream rather than buffering the whole body
-  and rejecting afterwards; `testOversizedApiResponseAbortsTheReply` proves this by declaring
-  an 8 GB `Content-Length` and never closing the socket.
+- HEAD discovery consumes no body and stops before requesting the validated tag URL;
+  `testDiscoveryDoesNotFollowTagOrReadBody` covers a large declared GET body and an archive redirect.
 
 ### Forbidden patterns
 
@@ -959,8 +1054,12 @@ incompatible metadata or widget-address collisions fail without replacing the ex
 core buffer on the worker. Owner-thread completion checks the original provider/revision;
 `BufferService` also tracks edits not yet pulled from the active editor. An older successful
 save never clears a newer draft. Manual save waits for actual completion with lifecycle guards;
-queue shutdown drains accepted work before releasing the context. None/BackupFile policies
-only synchronize memory for these sources: no implicit disk backup or false backup-success event.
+queue shutdown drains accepted work before releasing the context. The wait is bounded and
+cannot acknowledge a newer edit or replacement binding. Memory completion may have **zero**
+core-revision delta: a durable provenance receipt requires the actual post-completion revision
+to equal that operation's captured revision and no newer current origin. An older callback never
+copies a newer observed revision onto its receipt. None/BackupFile policies only synchronize
+memory for these sources: no implicit disk backup or false backup-success event.
 
 Memory documents are non-file-backed but are **not** members of the widget-only
 `m_virtualBufferIds` sync-skip set. `isVirtualBuffer()` includes both kinds for filesystem and

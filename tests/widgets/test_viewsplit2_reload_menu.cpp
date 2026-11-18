@@ -1,51 +1,17 @@
-// Tests for the new ViewWindow2::reload() method added in commit 94c53d36.
-//
-// The reload() method is the back-end for the new "Reload" tab context menu
-// entry added in commit bf44c324 to ViewSplit2::createTabContextMenu().
-//
-// SCOPE ADJUSTMENT (documented in
-// .sisyphus/notepads/reload-tab-context-menu/problems.md):
-//
-// Compiling viewwindow2.cpp into this test would pull in ~12 transitive widget
-// dependencies (attachmentpopup2, attachmentdragdropareaindicator2,
-// statuswidget, editreaddiscardaction, findandreplacewidget2, floatingwidget,
-// outlineprovider, tagpopup2, viewwindowtoolbarhelper2, wordcountpanel,
-// wordcountpopup2, plus their deeper deps such as iconutils, propertydefs,
-// widgetsfactory, lineedit, combobox, lineeditwithsnippet, ...). The
-// build-system iteration to satisfy that link chain is far beyond what fits in
-// this task's budget AND would still couple a focused unit test to the
-// widgets/ link surface.
-//
-// Instead this test follows the established stub-injection pattern from
-// `test_snippet_apply` (tests/widgets/test_snippet_apply.cpp): the
-// viewwindow2.cpp body is NOT compiled into this test. Instead we provide
-// inline no-op definitions for every non-pure-virtual ViewWindow2 method that
-// the linker needs to resolve (vtable entries + ctor/dtor + helpers used by
-// our test path). TestViewWindow2 then inherits from ViewWindow2 and provides
-// a `bool reload()` override that mirrors the production reload() logic
-// byte-for-byte from ViewWindow2::reload() in src/widgets/viewwindow2.cpp
-// (locate it by symbol; line ranges rot).
-//
-// This is equivalent to testing the production reload() against the same
-// inputs and outputs:
-//   - Behavior under empty resolved path                (testEmptyPathReturnsFalse)
-//   - Clean reload picks up disk content                (testCleanReloadPicksUpDiskContent)
-//   - Dirty + Cancel preserves dirty state              (testDirtyCancelKeepsState)
-//   - Dirty + Discard replaces content                  (testDirtyDiscardReplacesContent)
-//   - Dirty + Save then reloads                         (testDirtySaveSavesThenReloads)
-//   - Mode is preserved (setMode is never called)       (testModePreservedAcrossReload)
-//   - m_externalChangeDismissed cleared on success (testExternalChangeDismissedClearedOnReload)
-//
-// Any future drift between the production reload() and the test's mirror copy
-// would surface in the manual QA scenario in F3 of the parent plan.
+// Exercise production ViewWindow2 reload/save behavior with real notebook buffers.
 
 #include <QApplication>
 #include <QFile>
 #include <QMessageBox>
+#include <QPointingDevice>
+#include <QProxyStyle>
 #include <QPushButton>
 #include <QSignalSpy>
+#include <QTabBar>
 #include <QTextStream>
 #include <QTimer>
+#include <QToolButton>
+#include <QWheelEvent>
 #include <QtTest>
 
 #include <core/nodeidentifier.h>
@@ -57,181 +23,10 @@
 #include <temp_dir_fixture.h>
 #include <vxcore/vxcore.h>
 
-#include <widgets/messageboxhelper.h>
+#include <widgets/viewsplit2.h>
 #include <widgets/viewwindow2.h>
 
 using namespace vnotex;
-
-// -----------------------------------------------------------------------------
-// Stub bodies for ViewWindow2 non-pure-virtual methods.
-//
-// These satisfy the linker without dragging in the full widget dependency
-// chain. Same pattern as tests/widgets/test_snippet_apply.cpp; see the
-// header comment of this file for the scope-adjustment rationale.
-// -----------------------------------------------------------------------------
-
-namespace vnotex {
-
-ViewWindow2::ViewWindow2(ServiceLocator &p_services, const Buffer2 &p_buffer, QWidget *p_parent)
-    : QFrame(p_parent), m_services(p_services), m_buffer(p_buffer) {
-  m_lastKnownRevision = m_buffer.getRevision();
-}
-
-ViewWindow2::~ViewWindow2() = default;
-
-const Buffer2 &ViewWindow2::getBuffer() const { return m_buffer; }
-Buffer2 &ViewWindow2::getBuffer() { return m_buffer; }
-const NodeIdentifier &ViewWindow2::getNodeId() const { return m_buffer.nodeId(); }
-ID ViewWindow2::getViewWindowId() const { return m_viewWindowId; }
-void ViewWindow2::setViewWindowId(ID p_id) { m_viewWindowId = p_id; }
-QIcon ViewWindow2::getIcon() const { return {}; }
-QString ViewWindow2::getName() const {
-  const QString path = m_buffer.nodeId().relativePath;
-  int lastSlash = path.lastIndexOf(QLatin1Char('/'));
-  if (lastSlash >= 0) {
-    return path.mid(lastSlash + 1);
-  }
-  return path;
-}
-QSharedPointer<OutlineProvider> ViewWindow2::getOutlineProvider() const { return {}; }
-
-// Added together with the comment dock: a ViewWindow2 with no comment support
-// hands back null and the panel simply goes empty.
-QSharedPointer<CommentProvider> ViewWindow2::getCommentProvider() const { return {}; }
-
-// Non-pure virtual, so it needs a body here too: a window that does not follow
-// a rename inherits the base no-op.
-void ViewWindow2::handleNodeRetargeted(const NodeIdentifier &) {}
-QString ViewWindow2::getTitle() const { return getName(); }
-ViewWindowMode ViewWindow2::getMode() const { return m_mode; }
-int ViewWindow2::getCursorPosition() const { return -1; }
-int ViewWindow2::getScrollPosition() const { return -1; }
-ViewWindow2::ViewPositionState ViewWindow2::capturePositionState() const { return {}; }
-void ViewWindow2::restorePositionState(const ViewPositionState &) {}
-// Mirrors src/widgets/viewwindow2.cpp (syncEditorFromBufferPreservingPosition).
-void ViewWindow2::syncEditorFromBufferPreservingPosition() {
-  syncEditorFromBufferPreservingPosition(capturePositionState());
-}
-void ViewWindow2::syncEditorFromBufferPreservingPosition(const ViewPositionState &p_state) {
-  syncEditorFromBuffer();
-  if (p_state.isValid()) {
-    restorePositionState(p_state);
-  }
-}
-bool ViewWindow2::isModified() const { return m_editorDirty || m_buffer.isModified(); }
-
-ViewWindowLayoutMode ViewWindow2::getLayoutMode() const { return ViewWindowLayoutMode::FullWidth; }
-void ViewWindow2::setLayoutMode(ViewWindowLayoutMode p_mode) {
-  m_layoutModeOverride = static_cast<int>(p_mode);
-}
-void ViewWindow2::toggleLayoutMode() {}
-
-void ViewWindow2::onNodeRenamed(const NodeIdentifier &p_newNodeId) {
-  m_buffer.setNodeId(p_newNodeId);
-}
-
-bool ViewWindow2::aboutToClose(bool) { return true; }
-
-void ViewWindow2::setAutoReload(bool p_enabled) { m_autoReload = p_enabled; }
-bool ViewWindow2::autoReload() const { return m_autoReload; }
-
-// reload() is intentionally NOT stubbed here: TestViewWindow2 below provides
-// a non-virtual shadow that mirrors the production body. Calls go to
-// TestViewWindow2::reload() via static dispatch on a TestViewWindow2*.
-bool ViewWindow2::reload() { return false; }
-
-bool ViewWindow2::save() {
-  // Minimal but realistic save stub used by reload()'s Save branch.
-  // Mirrors the production ViewWindow2::save() in viewwindow2.cpp but skips the
-  // emit statusChanged() / showMessage() calls (no status widget here).
-  if (!m_buffer.isValid()) {
-    return false;
-  }
-  auto *bufferService = m_services.get<BufferService>();
-  if (bufferService) {
-    bufferService->syncNow(m_buffer.id());
-  }
-  m_editorDirty = false;
-  setModified(false);
-  bool ok = m_buffer.save();
-  if (ok) {
-    m_lastKnownRevision = m_buffer.getRevision();
-  } else {
-    m_editorDirty = true;
-  }
-  return ok;
-}
-
-void ViewWindow2::onEditorContentsChanged() {
-  if (!m_buffer.isValid()) {
-    return;
-  }
-  m_editorDirty = true;
-  auto *bufferService = m_services.get<BufferService>();
-  if (bufferService) {
-    bufferService->markDirty(m_buffer.id());
-  }
-}
-
-// Public slots
-void ViewWindow2::findNext(const QString &, FindOptions) {}
-void ViewWindow2::replace(const QString &, FindOptions, const QString &) {}
-void ViewWindow2::replaceAll(const QString &, FindOptions, const QString &) {}
-void ViewWindow2::refreshToolBarIcons() {}
-void ViewWindow2::applySnippet(const QString &) {}
-void ViewWindow2::applySnippet() {}
-void ViewWindow2::clearHighlights() {}
-void ViewWindow2::applyFileOpenSettings(const FileOpenSettings &) {}
-void ViewWindow2::handleEditorConfigChange() {}
-void ViewWindow2::handleThemeChanged() {}
-void ViewWindow2::reinterpretWithEncoding(const QString &) {}
-
-// Protected slots
-void ViewWindow2::handleFindTextChanged(const QString &, FindOptions) {}
-void ViewWindow2::handleFindNext(const QStringList &, FindOptions) {}
-void ViewWindow2::handleReplace(const QString &, FindOptions, const QString &) {}
-void ViewWindow2::handleReplaceAll(const QString &, FindOptions, const QString &) {}
-void ViewWindow2::handleFindAndReplaceWidgetClosed() {}
-void ViewWindow2::handleFindAndReplaceWidgetOpened() {}
-
-// Private slots (still need symbols for vtable / signal-slot wiring)
-void ViewWindow2::onContentReplacementStateChanged(const QString &, bool, bool, bool) {}
-void ViewWindow2::onBufferAutoSaved(const QString &) {}
-void ViewWindow2::onBufferModifiedChanged(const QString &) {}
-void ViewWindow2::onAttachmentChanged(const QString &) {}
-void ViewWindow2::onBufferExternallyChanged(const QString &, BufferState) {}
-
-// T28: stub for the new RO-rejection slots. test_viewsplit2_reload_menu does
-// not exercise this path; the no-op bodies just satisfy the linker.
-void ViewWindow2::onDirtyRejectedReadOnly(const QString &) {}
-void ViewWindow2::onSaveRejectedReadOnly(const QString &) {}
-void ViewWindow2::showReadOnlyWarning() {}
-
-// Protected
-void ViewWindow2::applyReadableWidth() {}
-void ViewWindow2::handleTypeAction(int) {}
-void ViewWindow2::fetchWordCountInfo(const std::function<void(const WordCountInfo &)> &) const {}
-void ViewWindow2::addAdditionalRightToolBarActions(QToolBar *) {}
-void ViewWindow2::handlePrint() {}
-void ViewWindow2::showFindAndReplaceWidget() {}
-QString ViewWindow2::selectedText() const { return {}; }
-QPoint ViewWindow2::getFloatingWidgetPosition() { return {}; }
-bool ViewWindow2::eventFilter(QObject *, QEvent *) { return false; }
-void ViewWindow2::keyPressEvent(QKeyEvent *) {}
-void ViewWindow2::wheelEvent(QWheelEvent *) {}
-void ViewWindow2::resizeEvent(QResizeEvent *) {}
-
-ServiceLocator &ViewWindow2::getServices() const { return m_services; }
-
-// Static members used by the header that are never read in our test path,
-// but the linker still requires definitions.
-QString ViewWindow2::s_attachmentFullIconFile;
-QString ViewWindow2::s_attachmentFullIconForeground;
-QString ViewWindow2::s_attachmentFullIconDisabledForeground;
-QString ViewWindow2::s_attachmentFullIconMasterColor;
-QIcon ViewWindow2::s_attachmentFullIcon;
-
-} // namespace vnotex
 
 namespace tests {
 
@@ -242,18 +37,25 @@ class TestViewWindow2 : public vnotex::ViewWindow2 {
 public:
   TestViewWindow2(vnotex::ServiceLocator &p_services, const vnotex::Buffer2 &p_buffer,
                   QWidget *p_parent = nullptr)
-      : vnotex::ViewWindow2(p_services, p_buffer, p_parent) {}
+      : vnotex::ViewWindow2(p_services, p_buffer, p_parent),
+        m_latestContent(p_buffer.decode(p_buffer.getContentRaw())) {}
+
+  ~TestViewWindow2() override {
+    if (auto *buffers = getServices().get<BufferService>()) {
+      buffers->unregisterActiveWriter(getBuffer().id(), reinterpret_cast<quintptr>(this));
+    }
+  }
 
   // ============ Pure virtual implementations ============
   void setMode(vnotex::ViewWindowMode p_mode) override {
     ++setModeCallCount;
     m_mode = p_mode;
   }
-  void syncEditorFromBuffer() override { ++syncEditorCallCount; }
-  void setModified(bool p_modified) override {
-    m_modifiedFlag = p_modified;
-    m_editorDirty = p_modified ? true : m_editorDirty;
+  void syncEditorFromBuffer() override {
+    ++syncEditorCallCount;
+    m_latestContent = getBuffer().decode(getBuffer().getContentRaw());
   }
+  void setModified(bool p_modified) override { m_editorDirty = p_modified; }
   QString getLatestContent() const override { return m_latestContent; }
   void scrollUp() override {}
   void scrollDown() override {}
@@ -276,92 +78,9 @@ public:
 
   // ============ Test seams ============
   void setInitialMode(vnotex::ViewWindowMode p_mode) { m_mode = p_mode; }
-  void setExternalChangeDismissed(bool p_value) { m_externalChangeDismissed_test = p_value; }
-  bool externalChangeDismissed() const { return m_externalChangeDismissed_test; }
-
-  // Test-local replica of m_externalChangeDismissed. We mirror the production
-  // semantics inside this test's reload() override (which clears the flag on
-  // success). The production flag lives in the private base member; we mirror
-  // it here via a test-owned slot since friend access would require touching
-  // production headers.
-  bool m_externalChangeDismissed_test = false;
-
-  // ============ reload() — mirrors ViewWindow2::reload() ============
-  //
-  // INVARIANT: this body is a structural mirror of the production
-  // ViewWindow2::reload() in src/widgets/viewwindow2.cpp (find it by symbol,
-  // not by line number — the line range rots). The only intentional
-  // differences are that we access m_buffer / m_services via
-  // their public accessors (getBuffer() / getServices()) because both are
-  // private in ViewWindow2 and we cannot add a `friend` declaration without
-  // touching production headers (forbidden by this task's scope). All
-  // observable behavior (control flow, side-effects on protected m_editorDirty
-  // / m_lastKnownRevision / m_mode) is identical. Any drift must be caught
-  // by the F3 manual QA scenario in the parent plan.
-  bool reload() {
-    // Defensive guard for unbound/untitled buffers.
-    if (getBuffer().resolvedPath().isEmpty()) {
-      return false;
-    }
-
-    // Sync editor content to buffer first so isModified() is accurate.
-    auto *bufferService = getServices().get<vnotex::BufferService>();
-    if (bufferService && m_editorDirty && getBuffer().isValid()) {
-      bufferService->syncNow(getBuffer().id());
-    }
-
-    const bool wasDirty = isModified();
-    bool needsDiscard = false;
-
-    if (wasDirty) {
-      // Ask to save changes.
-      int ret = vnotex::MessageBoxHelper::questionSaveDiscardCancel(
-          vnotex::MessageBoxHelper::Question,
-          tr("Reload note (%1) and discard unsaved changes?").arg(getName()),
-          tr("Note path (%1).").arg(getBuffer().resolvedPath()), QString(), this);
-      switch (ret) {
-      case QMessageBox::Save:
-        if (!save()) {
-          return false;
-        }
-        break;
-
-      case QMessageBox::Discard:
-        needsDiscard = true;
-        break;
-
-      case QMessageBox::Cancel:
-      default:
-        return false;
-      }
-    }
-
-    const ViewPositionState position = capturePositionState();
-
-    bool clearedDirty = false;
-    if (needsDiscard) {
-      m_editorDirty = false;
-      setModified(false);
-      clearedDirty = true;
-    }
-
-    if (!getBuffer().reload()) {
-      if (clearedDirty) {
-        m_editorDirty = true;
-        setModified(true);
-      }
-      return false;
-    }
-
-    syncEditorFromBufferPreservingPosition(position);
-    m_lastKnownRevision = getBuffer().getRevision();
-    m_externalChangeDismissed_test = false;
-    return true;
-  }
 
   // ============ Helpers exposing protected state to tests ============
   vnotex::ViewWindowMode currentMode() const { return m_mode; }
-  void setEditorDirty(bool p_dirty) { m_editorDirty = p_dirty; }
 
   // ============ Counters ============
   mutable int setModeCallCount = 0;
@@ -373,7 +92,6 @@ public:
   int fakeCursorOffset = -1;
   mutable int restoredCursorLine = -1;
   mutable int restoredCursorOffset = -1;
-  bool m_modifiedFlag = false;
   QString m_latestContent;
 };
 
@@ -391,9 +109,11 @@ private slots:
   void testDirtyDiscardReplacesContent();
   void testDirtySaveSavesThenReloads();
   void testModePreservedAcrossReload();
-  void testExternalChangeDismissedClearedOnReload();
   void testCursorStateHandedBackOnReload();
   void testCursorRestoreSkippedWhenReloadFails();
+  void testTabWheelScrolling_data();
+  void testTabWheelScrolling();
+  void testTabWheelAccumulation();
 
 private:
   vnotex::Buffer2 openBuffer(const QString &p_relativePath);
@@ -437,6 +157,7 @@ void TestViewSplit2ReloadMenu::initTestCase() {
 }
 
 void TestViewSplit2ReloadMenu::cleanupTestCase() {
+  m_bufferService->shutdown(2000);
   delete m_bufferService;
   m_bufferService = nullptr;
 
@@ -591,7 +312,7 @@ void TestViewSplit2ReloadMenu::testDirtyCancelKeepsState() {
   QVERIFY(!ok);
   QVERIFY(view.isModified()); // Cancel preserves dirty state.
   QCOMPARE(view.getBuffer().getContentRaw(), QByteArray("edited\n"));
-  QCOMPARE(view.syncEditorCallCount, 0); // Reload was aborted.
+  QCOMPARE(readFile(view.getBuffer().resolvedPath()), QByteArray("original\n"));
 }
 
 // =============================================================================
@@ -625,7 +346,6 @@ void TestViewSplit2ReloadMenu::testDirtyDiscardReplacesContent() {
   QVERIFY(ok);
   QCOMPARE(view.getBuffer().getContentRaw(), QByteArray("disk-version\n"));
   QVERIFY(!view.isModified());
-  QCOMPARE(view.syncEditorCallCount, 1);
 }
 
 // =============================================================================
@@ -689,34 +409,6 @@ void TestViewSplit2ReloadMenu::testModePreservedAcrossReload() {
 }
 
 // =============================================================================
-// Subtest 7: m_externalChangeDismissed is cleared on successful reload
-// =============================================================================
-void TestViewSplit2ReloadMenu::testExternalChangeDismissedClearedOnReload() {
-  const QString relPath = QStringLiteral("ext_change_dismissed.md");
-  const QString fileId = m_notebookService->createFile(m_notebookId, QString(), relPath);
-  QVERIFY(!fileId.isEmpty());
-
-  vnotex::Buffer2 buf = openBuffer(relPath);
-  QVERIFY(buf.isValid());
-  QVERIFY(buf.setContentRaw(QByteArray("data\n")));
-  QVERIFY(buf.save());
-
-  TestViewWindow2 view(m_services, buf);
-  view.setInitialMode(vnotex::ViewWindowMode::Read);
-
-  // Simulate that a prior external-change dialog was dismissed.
-  view.setExternalChangeDismissed(true);
-  QVERIFY(view.externalChangeDismissed());
-
-  const bool ok = view.reload();
-  QVERIFY(ok);
-
-  // Successful reload clears the dismiss-suppression flag so future
-  // external changes will re-prompt instead of being silently swallowed.
-  QVERIFY(!view.externalChangeDismissed());
-}
-
-// =============================================================================
 // Subtest 8: the captured caret is handed back to restorePositionState()
 // =============================================================================
 void TestViewSplit2ReloadMenu::testCursorStateHandedBackOnReload() {
@@ -775,6 +467,151 @@ void TestViewSplit2ReloadMenu::testCursorRestoreSkippedWhenReloadFails() {
   QCOMPARE(view.restoreScrollCallCount, 0);
   QCOMPARE(view.restoredCursorLine, -1);
   QCOMPARE(view.restoredCursorOffset, -1);
+}
+
+namespace {
+class NoTabWheelStyle : public QProxyStyle {
+public:
+  NoTabWheelStyle() : QProxyStyle(QStringLiteral("Fusion")) {}
+  int styleHint(StyleHint p_hint, const QStyleOption *p_option, const QWidget *p_widget,
+                QStyleHintReturn *p_return) const override {
+    return p_hint == SH_TabBar_AllowWheelScrolling
+               ? 0
+               : QProxyStyle::styleHint(p_hint, p_option, p_widget, p_return);
+  }
+};
+
+void populateTabs(ViewSplit2 &p_split) {
+  for (int i = 0; i < 8; ++i) {
+    p_split.addTab(new QWidget(&p_split), QStringLiteral("Document %1 with a long title").arg(i));
+  }
+  p_split.resize(420, 180);
+  p_split.show();
+}
+
+void sendTabWheel(QTabBar *p_bar, QPoint p_angle, QPoint p_pixels = {}, bool p_precise = false,
+                  bool p_inverted = false, Qt::ScrollPhase p_phase = Qt::NoScrollPhase) {
+  static const QPointingDevice mouse(
+      QStringLiteral("tab-test mouse"), 1, QInputDevice::DeviceType::Mouse,
+      QPointingDevice::PointerType::Generic, QInputDevice::Capability::Position, 1, 0);
+  static const QPointingDevice preciseMouse(
+      QStringLiteral("tab-test precise mouse"), 2, QInputDevice::DeviceType::Mouse,
+      QPointingDevice::PointerType::Generic,
+      QInputDevice::Capability::Position | QInputDevice::Capability::PixelScroll, 1, 0);
+  const QPoint pos = p_bar->rect().center();
+  QWheelEvent event(pos, p_bar->mapToGlobal(pos), p_pixels, p_angle, Qt::NoButton, Qt::NoModifier,
+                    p_phase, p_inverted, Qt::MouseEventNotSynthesized,
+                    p_precise ? &preciseMouse : &mouse);
+  QApplication::sendEvent(p_bar, &event);
+}
+} // namespace
+
+void TestViewSplit2ReloadMenu::testTabWheelScrolling_data() {
+  QTest::addColumn<bool>("rtl");
+  QTest::addColumn<QPoint>("angle");
+  QTest::addColumn<QPoint>("pixels");
+  QTest::addColumn<bool>("precise");
+  QTest::addColumn<bool>("inverted");
+  QTest::newRow("vertical-notch") << false << QPoint(0, -120) << QPoint() << false << false;
+  QTest::newRow("cocoa-estimated-pixels")
+      << false << QPoint(0, -120) << QPoint(0, -10) << false << false;
+  QTest::newRow("cocoa-natural-scrolling")
+      << false << QPoint(0, -120) << QPoint(0, -10) << false << true;
+  QTest::newRow("horizontal-notch") << false << QPoint(-120, 0) << QPoint() << false << false;
+  QTest::newRow("rtl-horizontal-notch") << true << QPoint(120, 0) << QPoint() << false << false;
+  QTest::newRow("precise-horizontal") << false << QPoint(-80, 0) << QPoint(-40, 0) << true << false;
+  QTest::newRow("precise-vertical") << false << QPoint(0, -80) << QPoint(0, -40) << true << false;
+  QTest::newRow("rtl-precise-horizontal") << true << QPoint(80, 0) << QPoint(40, 0) << true << true;
+}
+
+void TestViewSplit2ReloadMenu::testTabWheelScrolling() {
+  QFETCH(bool, rtl);
+  QFETCH(QPoint, angle);
+  QFETCH(QPoint, pixels);
+  QFETCH(bool, precise);
+  QFETCH(bool, inverted);
+  NoTabWheelStyle style;
+  ServiceLocator services;
+  ViewSplit2 split(services, QStringLiteral("wheel-test"));
+  auto *bar = split.tabBar();
+  bar->setStyle(&style);
+  split.setLayoutDirection(rtl ? Qt::RightToLeft : Qt::LeftToRight);
+  populateTabs(split);
+  auto *forward = bar->findChild<QToolButton *>(QStringLiteral("ScrollRightButton"));
+  auto *backward = bar->findChild<QToolButton *>(QStringLiteral("ScrollLeftButton"));
+  QVERIFY(forward && backward);
+  QTRY_VERIFY(forward->isVisible() && forward->isEnabled());
+  const auto initial = bar->tabRect(0);
+  QSignalSpy selection(bar, &QTabBar::currentChanged);
+
+  sendTabWheel(bar, angle, pixels, precise, inverted);
+  const auto scrolled = bar->tabRect(0);
+  QVERIFY(rtl ? scrolled.x() > initial.x() : scrolled.x() < initial.x());
+  sendTabWheel(bar, -angle, -pixels, precise, inverted);
+  QCOMPARE(bar->tabRect(0), initial);
+
+  for (int i = 0; i < 20; ++i) {
+    sendTabWheel(bar, angle, pixels, precise, inverted);
+  }
+  QVERIFY(!forward->isEnabled());
+  const auto end = bar->tabRect(bar->count() - 1);
+  QVERIFY(bar->rect().contains(end.center()));
+  sendTabWheel(bar, angle, pixels, precise, inverted);
+  QCOMPARE(bar->tabRect(bar->count() - 1), end);
+  for (int i = 0; i < 20; ++i) {
+    sendTabWheel(bar, -angle, -pixels, precise, inverted);
+  }
+  QCOMPARE(bar->tabRect(0), initial);
+  QCOMPARE(bar->currentIndex(), 0);
+  QCOMPARE(selection.count(), 0);
+}
+
+void TestViewSplit2ReloadMenu::testTabWheelAccumulation() {
+  ServiceLocator services;
+  ViewSplit2 split(services, QStringLiteral("wheel-accumulation"));
+  populateTabs(split);
+  auto *bar = split.tabBar();
+  auto *forward = bar->findChild<QToolButton *>(QStringLiteral("ScrollRightButton"));
+  QVERIFY(forward);
+  QTRY_VERIFY(forward->isVisible() && forward->isEnabled());
+  const auto initial = bar->tabRect(0);
+  QSignalSpy selection(bar, &QTabBar::currentChanged);
+  sendTabWheel(bar, QPoint(0, -60));
+  QCOMPARE(bar->tabRect(0), initial);
+  sendTabWheel(bar, QPoint(0, -60));
+  QVERIFY(bar->tabRect(0).x() < initial.x());
+  sendTabWheel(bar, QPoint(0, 120));
+  QCOMPARE(bar->tabRect(0), initial);
+
+  sendTabWheel(bar, QPoint(0, -60));
+  sendTabWheel(bar, {}, QPoint(0, -20), true, false, Qt::ScrollBegin);
+  QCOMPARE(bar->tabRect(0), initial);
+  sendTabWheel(bar, {}, QPoint(0, -20), true, false, Qt::ScrollMomentum);
+  QVERIFY(bar->tabRect(0).x() < initial.x());
+  const auto scrolled = bar->tabRect(0);
+  sendTabWheel(bar, {}, QPoint(0, -20), true);
+  sendTabWheel(bar, {}, QPoint(0, 20), true);
+  QCOMPARE(bar->tabRect(0), scrolled);
+  sendTabWheel(bar, {}, QPoint(0, 20), true);
+  QCOMPARE(bar->tabRect(0), initial);
+  sendTabWheel(bar, {}, QPoint(0, -20), true);
+  sendTabWheel(bar, {}, {}, true, false, Qt::ScrollEnd);
+  sendTabWheel(bar, {}, QPoint(0, -20), true);
+  QCOMPARE(bar->tabRect(0), initial);
+  sendTabWheel(bar, {}, QPoint(0, -40), true, false, Qt::ScrollBegin);
+  QVERIFY(bar->tabRect(0).x() < initial.x());
+
+  while (split.count() > 1) {
+    auto *page = split.widget(split.count() - 1);
+    split.removeTab(split.count() - 1);
+    delete page;
+  }
+  QTRY_VERIFY(!forward->isVisible());
+  const auto fitting = bar->tabRect(0);
+  sendTabWheel(bar, QPoint(0, -120));
+  QCOMPARE(bar->tabRect(0), fitting);
+  QCOMPARE(bar->currentIndex(), 0);
+  QCOMPARE(selection.count(), 0);
 }
 
 } // namespace tests

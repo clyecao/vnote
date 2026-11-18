@@ -33,8 +33,9 @@ The matching-file list does not accept drags or drops.
 `TagModel` validates the notebook/reload revision and cached ancestor chain, then emits
 `moveTagRequested`; it never mutates rows optimistically. `TagController` persists through
 the cancellable `TagService` move path. Drop acceptance acknowledges dispatch, not storage
-success. `TagExplorer2` reveals successful moves by name after both model resets, with a
-notebook guard on queued delivery; it leaves search text unchanged.
+success. `TagExplorer2` reveals successful moves by name after the coalesced reload,
+with notebook and active-dock guards on queued delivery; it leaves search text unchanged.
+Count-only refreshes update model roles without resetting selection or expansion.
 
 Keep the custom `TagView::startDrag()`: Qt's base Move implementation can clear the source
 after the controller has already moved it. Native Qt handlers own target feedback, auto-expand
@@ -83,8 +84,31 @@ into a `QMargins` derived from
 Gates: `tests/utils/test_itemheight_drift.cpp` (grep gate over the five
 overriding delegates), `tests/gui/test_itemviewutils.cpp` (behavioural),
 `tests/gui/test_uniformrowheight_invalidation.cpp` (asserts Qt resamples uniform
-row heights on `QEvent::StyleChange`, which is why the views need no
-`changeEvent` override).
+row heights on `QEvent::StyleChange`, so no height-specific cache invalidation
+is needed).
+
+## Tree spacing
+
+All tree views follow the active theme's [shared spacing policy](../gui/AGENTS.md#tree-spacing),
+including raw `QTreeView` and `QTreeWidget` instances. Keep constructor defaults
+through `TreeViewUtils::applyIndentation()` where applicable; do not add per-view
+QSS properties or style-change handlers. Custom notebook, search and task-entry
+delegates use `TreeViewUtils::horizontalSpacing(initializedOption, legacyPadding)`.
+Its left/right insets include the style's border, padding and native text margin;
+its icon/count gap is separate. Use the same values for painting and width hints,
+including when `sizeHint()` receives an empty rectangle. Native and non-opted-in
+themes retain each delegate's legacy spacing. Lists are not part of this policy.
+
+`tests/gui/test_notebooknodedelegate_sizehint.cpp` compares rendered folder text
+with the standard delegate under plain and left-bordered styles, and checks
+file-icon gaps and empty-rectangle width measurement. Keep inline editors
+on Qt's `SE_ItemViewItemText` allocation, not the inset glyph rectangle.
+
+Notebook, Tags and Outline share the viewport-fixed count renderer documented in
+[GUI utilities](../gui/AGENTS.md#tree-child-count-badges); Tasks opts in there too.
+Notebook's custom delegate supplies cached folder totals. Paint the badge after
+focus chrome, using the normal theme foreground like the shared standard delegate,
+not the system HighlightedText color over a QSS selection background.
 
 ## Search result selection colors
 

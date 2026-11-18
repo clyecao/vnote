@@ -34,6 +34,8 @@ class TurndownConverter {
 
         this.fixMark();
 
+        this.fixHeading();
+
         this.fixParagraph();
 
         // MUST be called: without it the bundled default image rule wins and
@@ -76,7 +78,7 @@ class TurndownConverter {
             const annotation = Array.from(math.querySelectorAll('semantics > annotation')).find(node =>
                 node.closest('math') === math &&
                 (node.getAttribute('encoding') || '').trim().toLowerCase() === 'application/x-tex');
-            const tex = annotation ? annotation.textContent.trim() : '';
+            const tex = (annotation ? annotation.textContent.trim() : '') || this.mathmlToTex(math);
             if (!tex) {
                 continue;
             }
@@ -95,6 +97,166 @@ class TurndownConverter {
             replacement.textContent = 'math';
             target.replaceWith(replacement);
         }
+    }
+
+    mathmlToTex(p_math) {
+        // Browser selection copying can omit hidden TeX annotations. Recover only
+        // understood presentation nodes; never turn a partial formula into TeX.
+        const operators = new Map([
+            ['−', '-'], ['⋅', '\\cdot '], ['×', '\\times '], ['÷', '\\div '],
+            ['⋯', '\\cdots '], ['…', '\\ldots '], ['±', '\\pm '],
+            ['≤', '\\le '], ['≥', '\\ge '], ['≠', '\\ne '], ['∞', '\\infty '],
+            ['→', '\\to '], ['{', '\\{'], ['}', '\\}']
+        ]);
+        // MathML token roles do not restrict their contents to letters: KaTeX puts
+        // bars, slashes and infinity in mi. Preserve Unicode math symbols without
+        // growing a per-symbol TeX table, but never interpret TeX syntax as a glyph.
+        const symbol = value => operators.get(value) ??
+            (value !== '~' && /^(?:[+\-=<>(),.;:!/\[\]|]|\p{Sm})$/u.test(value) ? value : null);
+        const fonts = new Map([
+            ['italic', 'mathit'], ['bold', 'mathbf'], ['bold-italic', 'boldsymbol'],
+            ['script', 'mathcal'], ['fraktur', 'mathfrak'], ['double-struck', 'mathbb'],
+            ['sans-serif', 'mathsf'], ['monospace', 'mathtt']
+        ]);
+        // Keep named operators as operators (not upright identifiers), including
+        // limit placement. Terminate control words before adjoining identifiers.
+        const functions = new Set([
+            'arcsin', 'arccos', 'arctan', 'arctg', 'arcctg', 'arg', 'ch', 'cos', 'cosec',
+            'cosh', 'cot', 'cotg', 'coth', 'csc', 'ctg', 'cth', 'deg', 'dim', 'exp', 'hom',
+            'ker', 'lg', 'ln', 'log', 'sec', 'sin', 'sinh', 'sh', 'tan', 'tanh', 'tg', 'th',
+            'det', 'gcd', 'inf', 'lim', 'max', 'min', 'Pr', 'sup'
+        ]);
+        const normalVariant = node => !node.hasAttribute('mathvariant') ||
+            node.getAttribute('mathvariant') === 'normal';
+        const identifier = node => node?.localName === 'mi' && !node.children.length &&
+            normalVariant(node) && /^\p{L}+$/u.test(node.textContent.trim());
+        const application = node => node?.localName === 'mo' && !node.children.length &&
+            normalVariant(node) && node.textContent.trim() === '\u2061';
+        const brace = node => {
+            if (!node || !['munder', 'mover'].includes(node.localName) || node.children.length !== 2) {
+                return false;
+            }
+            const marker = node.children[1];
+            return marker.localName === 'mo' && !marker.children.length &&
+                marker.textContent.trim() === (node.localName === 'munder' ? '⏟' : '⏞');
+        };
+        const convert = node => {
+            if (node.namespaceURI !== 'http://www.w3.org/1998/Math/MathML') {
+                return null;
+            }
+            const name = node.localName;
+            const children = Array.from(node.children);
+            if (['mi', 'mn', 'mo', 'mtext'].includes(name)) {
+                if (children.length || (name !== 'mi' && !normalVariant(node))) {
+                    return null;
+                }
+                const value = node.textContent.trim();
+                if (name === 'mi') {
+                    if (!/^\p{L}+$/u.test(value)) {
+                        const tex = symbol(value);
+                        // An identifier bar is ordinary, not the relation atom of raw ∣.
+                        return normalVariant(node) && tex !== null ? '\\mathord{' + tex.trim() + '}' : null;
+                    }
+                    if (application(node.nextElementSibling)) {
+                        if (!normalVariant(node)) {
+                            return null;
+                        }
+                        return functions.has(value) ? '\\' + value + ' ' : '\\operatorname{' + value + '}';
+                    }
+                    if (!normalVariant(node)) {
+                        const font = fonts.get(node.getAttribute('mathvariant'));
+                        // Bound styled alphabets to bundled glyphs; script/blackboard
+                        // lowercase can silently fall back to an unstyled letter.
+                        if (!font || !/^[A-Za-z]+$/.test(value) ||
+                            (['mathcal', 'mathbb'].includes(font) && !/^[A-Z]+$/.test(value))) {
+                            return null;
+                        }
+                        return '\\' + font + '{' + value + '}';
+                    }
+                    // Multi-letter identifiers default to upright in MathML.
+                    return Array.from(value).length === 1 && !node.hasAttribute('mathvariant') ?
+                        value : '\\mathrm{' + value + '}';
+                }
+                if (name === 'mn') {
+                    return /^(?:\d+(?:\.\d*)?|\.\d+)$/.test(value) ? value : null;
+                }
+                if (name === 'mo') {
+                    if (application(node)) {
+                        return identifier(node.previousElementSibling) ? '' : null;
+                    }
+                    return symbol(value);
+                }
+                const text = node.textContent.replace(/\r\n|[\r\n\t\u00a0]/g, ' ')
+                    .replace(/[\\{}$%&#_^~]/g, ch => {
+                        if (ch === '\\') return '\\textbackslash{}';
+                        if (ch === '^') return '\\textasciicircum{}';
+                        if (ch === '~') return '\\textasciitilde{}';
+                        return '\\' + ch;
+                    });
+                return '\\text{' + text + '}';
+            }
+            if (Array.from(node.childNodes).some(child => child.nodeType === 3 && child.data.trim())) {
+                return null;
+            }
+            if (name === 'semantics') {
+                const presentation = children.filter(child =>
+                    !['annotation', 'annotation-xml'].includes(child.localName));
+                return presentation.length === 1 ? convert(presentation[0]) : null;
+            }
+            if (brace(node)) {
+                const base = convert(children[0]);
+                return base === null ? null :
+                    (name === 'munder' ? '\\underbrace{' : '\\overbrace{') + base + '}';
+            }
+            const parts = children.map(convert);
+            if (parts.some(part => part === null)) {
+                return null;
+            }
+            const baseName = children[0]?.localName;
+            const functionBase = baseName === 'mrow' && children[0].children.length === 2 &&
+                identifier(children[0].children[0]) && application(children[0].children[1]);
+            const atomicBase = functionBase || ['mi', 'mo'].includes(baseName) ||
+                (baseName === 'mn' && parts[0].length === 1);
+            const scriptBase = atomicBase ? parts[0] : '{' + parts[0] + '}';
+            switch (name) {
+            case 'math':
+            case 'mrow':
+                return parts.join('');
+            case 'mspace': {
+                const width = node.getAttribute('width') || '';
+                return !parts.length && /^(?:\d+(?:\.\d*)?|\.\d+)em$/.test(width) &&
+                    !['height', 'depth', 'linebreak'].some(attr => node.hasAttribute(attr)) ?
+                    '\\hspace{' + width + '}' : null;
+            }
+            case 'msqrt':
+                return parts.length ? '\\sqrt{' + parts.join('') + '}' : null;
+            case 'mfrac':
+                return parts.length === 2 ? '\\frac{' + parts[0] + '}{' + parts[1] + '}' : null;
+            case 'mroot':
+                return parts.length === 2 ? '\\sqrt[{' + parts[1] + '}]{' + parts[0] + '}' : null;
+            case 'msub':
+            case 'msup':
+                return parts.length === 2 ? scriptBase + (name === 'msub' ? '_{' : '^{') + parts[1] + '}' : null;
+            case 'msubsup':
+                return parts.length === 3 ? scriptBase + '_{' + parts[1] + '}^{' + parts[2] + '}' : null;
+            case 'munderover':
+                return parts.length === 3 ?
+                    '\\overset{' + parts[2] + '}{\\underset{' + parts[1] + '}{' + parts[0] + '}}' : null;
+            case 'munder':
+            case 'mover':
+                if (parts.length !== 2) {
+                    return null;
+                }
+                if (children[0].localName === name && brace(children[0])) {
+                    return parts[0] + (name === 'munder' ? '_{' : '^{') + parts[1] + '}';
+                }
+                return (name === 'munder' ? '\\underset{' : '\\overset{') + parts[1] + '}{' + parts[0] + '}';
+            default:
+                return null;
+            }
+        };
+        // Keep internal TeX command separators, but not whitespace next to $ delimiters.
+        return convert(p_math)?.trim() ?? null;
     }
 
     fixMath() {
@@ -329,6 +491,18 @@ class TurndownConverter {
                 }
 
                 return '<mark>' + content + '</mark>';
+            }
+        });
+    }
+
+    fixHeading() {
+        this.ts.addRule('heading', {
+            filter: ['h1', 'h2', 'h3', 'h4', 'h5', 'h6'],
+            replacement: function(content, node) {
+                // The ATX prefix prevents list parsing. Literal backslashes are
+                // doubled by Turndown, so undo only its single leading list escape.
+                const heading = content.replace(/^(\d+)\\\. /, '$1. ');
+                return '\n\n' + '#'.repeat(Number(node.nodeName[1])) + ' ' + heading + '\n\n';
             }
         });
     }

@@ -25,10 +25,6 @@ const int c_maxRecycleBinRetentionDays = 3650;
 
 QStringList CoreConfig::s_availableLocales;
 
-// Out-of-line definition required by C++14 when the constant is odr-used
-// (e.g. bound to a qint64 reference). Redundant, but harmless, from C++17 on.
-constexpr qint64 CoreConfig::c_updateCheckIntervalMs;
-
 CoreConfig::CoreConfig(IConfigMgr *p_mgr, IConfig *p_topConfig) : IConfig(p_mgr, p_topConfig) {
   m_sectionName = QStringLiteral("core");
   initDefaults();
@@ -83,9 +79,6 @@ void CoreConfig::fromJson(const QJsonObject &p_jobj) {
 
   m_skippedUpdateVersion = READSTR(QStringLiteral("skippedUpdateVersion"));
 
-  m_lastUpdateCheckTime =
-      parseLastUpdateCheckTime(read(p_jobj, QStringLiteral("lastUpdateCheckTime")));
-
   m_recycleBinAutoCleanupEnabled = READBOOL(QStringLiteral("recycleBinAutoCleanupEnabled"));
 
   const auto retentionDaysKey = QStringLiteral("recycleBinRetentionDays");
@@ -95,7 +88,7 @@ void CoreConfig::fromJson(const QJsonObject &p_jobj) {
                                   : c_defaultRecycleBinRetentionDays;
 
   m_recycleBinCleanupEnabledSinceUtc =
-      parseLastUpdateCheckTime(read(p_jobj, QStringLiteral("recycleBinCleanupEnabledSinceUtc")));
+      parseTimestamp(read(p_jobj, QStringLiteral("recycleBinCleanupEnabledSinceUtc")));
 
   m_historyMaxCount = READINT(QStringLiteral("historyMaxCount"));
   if (m_historyMaxCount < 0) {
@@ -139,9 +132,6 @@ QJsonObject CoreConfig::toJson() const {
   obj[QStringLiteral("confirmExternalLinks")] = m_confirmExternalLinks;
   obj[QStringLiteral("updateSource")] = m_updateSource;
   obj[QStringLiteral("skippedUpdateVersion")] = m_skippedUpdateVersion;
-  // Decimal string: IConfig::readInt is 32-bit and QJsonValue::toInt() would
-  // truncate an epoch-millisecond value.
-  obj[QStringLiteral("lastUpdateCheckTime")] = QString::number(m_lastUpdateCheckTime);
   obj[QStringLiteral("recycleBinAutoCleanupEnabled")] = m_recycleBinAutoCleanupEnabled;
   obj[QStringLiteral("recycleBinRetentionDays")] = m_recycleBinRetentionDays;
   obj[QStringLiteral("recycleBinCleanupEnabledSinceUtc")] =
@@ -322,44 +312,6 @@ void CoreConfig::setSkippedUpdateVersion(const QString &p_version) {
   updateConfig(m_skippedUpdateVersion, p_version, this);
 }
 
-qint64 CoreConfig::getLastUpdateCheckTime() const { return m_lastUpdateCheckTime; }
-
-void CoreConfig::setLastUpdateCheckTime(qint64 p_msSinceEpoch) {
-  updateConfig(m_lastUpdateCheckTime, p_msSinceEpoch, this);
-}
-
-bool CoreConfig::isUpdateCheckDue(qint64 p_nowMsSinceEpoch, qint64 p_intervalMs) const {
-  if (m_lastUpdateCheckTime <= 0) {
-    // Never checked.
-    return true;
-  }
-
-  if (m_lastUpdateCheckTime > p_nowMsSinceEpoch) {
-    // Future-dated (clock moved backwards, or a corrupted value): treat as stale
-    // so the throttle can never wedge a user out of update checks forever.
-    return true;
-  }
-
-  return (p_nowMsSinceEpoch - m_lastUpdateCheckTime) >= p_intervalMs;
-}
-
-qint64 CoreConfig::parseLastUpdateCheckTime(const QJsonValue &p_value) {
-  if (p_value.isString()) {
-    bool ok = false;
-    const qint64 val = p_value.toString().toLongLong(&ok);
-    return (ok && val > 0) ? val : 0;
-  }
-
-  if (p_value.isDouble()) {
-    // Backward/forward compatibility with a bare JSON number. Values beyond
-    // 2^53 are not representable exactly, but epoch ms stays far below that.
-    const double val = p_value.toDouble();
-    return val > 0 ? static_cast<qint64>(val) : 0;
-  }
-
-  return 0;
-}
-
 int CoreConfig::getHistoryMaxCount() const { return m_historyMaxCount; }
 
 int CoreConfig::getSearchMaxResults() const { return m_searchMaxResults; }
@@ -494,37 +446,44 @@ void CoreConfig::initDefaults() {
   m_shortcuts[Shortcut::Properties] = QStringLiteral("F2");
   m_shortcuts[Shortcut::Global_WakeUp] = QStringLiteral("Ctrl+Alt+U");
 
-  auto makeAlias = [](const QString &p_name, const QString &p_desc, const QString &p_value) {
-    QJsonObject obj;
-    obj[QStringLiteral("name")] = p_name;
-    obj[QStringLiteral("description")] = p_desc;
-    obj[QStringLiteral("value")] = p_value;
-    return obj;
-  };
-  QJsonArray aliases;
-  aliases.append(makeAlias(QStringLiteral("n"),
-                           QStringLiteral("Search for files by name in current notebook"),
-                           QStringLiteral("find --scope notebook --object name")));
-  aliases.append(makeAlias(QStringLiteral("N"),
-                           QStringLiteral("Search for files by name in all notebooks"),
-                           QStringLiteral("find --scope all_notebook --object name")));
-  aliases.append(makeAlias(QStringLiteral("g"),
-                           QStringLiteral("Search for files by content in current notebook"),
-                           QStringLiteral("find --scope notebook --object content")));
-  aliases.append(makeAlias(QStringLiteral("G"),
-                           QStringLiteral("Search for files by content in all notebooks"),
-                           QStringLiteral("find --scope all_notebook --object content")));
-  aliases.append(makeAlias(QStringLiteral("b"),
-                           QStringLiteral("Search for files by content in open buffers"),
-                           QStringLiteral("find --scope buffer --object content")));
-  aliases.append(makeAlias(QStringLiteral("f"),
-                           QStringLiteral("Search for files by name in current folder"),
-                           QStringLiteral("find --scope folder --object name")));
-  aliases.append(makeAlias(QStringLiteral("t"),
-                           QStringLiteral("Search for files by tag in current notebook"),
-                           QStringLiteral("find --scope notebook --object tag")));
-  aliases.append(makeAlias(QStringLiteral("T"),
-                           QStringLiteral("Search for files by tag in all notebooks"),
-                           QStringLiteral("find --scope all_notebook --object tag")));
-  m_unitedEntryAlias = aliases;
+  m_unitedEntryAlias = defaultUnitedEntryAliases();
+}
+
+const QJsonArray &CoreConfig::defaultUnitedEntryAliases() {
+  static const QJsonArray c_aliases = []() {
+    auto makeAlias = [](const QString &p_name, const QString &p_desc, const QString &p_value) {
+      QJsonObject obj;
+      obj[QStringLiteral("name")] = p_name;
+      obj[QStringLiteral("description")] = p_desc;
+      obj[QStringLiteral("value")] = p_value;
+      return obj;
+    };
+    QJsonArray aliases;
+    aliases.append(makeAlias(QStringLiteral("n"),
+                             QStringLiteral("Search for files by name in current notebook"),
+                             QStringLiteral("find --scope notebook --object name")));
+    aliases.append(makeAlias(QStringLiteral("N"),
+                             QStringLiteral("Search for files by name in all notebooks"),
+                             QStringLiteral("find --scope all_notebook --object name")));
+    aliases.append(makeAlias(QStringLiteral("g"),
+                             QStringLiteral("Search for files by content in current notebook"),
+                             QStringLiteral("find --scope notebook --object content")));
+    aliases.append(makeAlias(QStringLiteral("G"),
+                             QStringLiteral("Search for files by content in all notebooks"),
+                             QStringLiteral("find --scope all_notebook --object content")));
+    aliases.append(makeAlias(QStringLiteral("b"),
+                             QStringLiteral("Search for files by content in open buffers"),
+                             QStringLiteral("find --scope buffer --object content")));
+    aliases.append(makeAlias(QStringLiteral("f"),
+                             QStringLiteral("Search for files by name in current folder"),
+                             QStringLiteral("find --scope folder --object name")));
+    aliases.append(makeAlias(QStringLiteral("t"),
+                             QStringLiteral("Search for files by tag in current notebook"),
+                             QStringLiteral("find --scope notebook --object tag")));
+    aliases.append(makeAlias(QStringLiteral("T"),
+                             QStringLiteral("Search for files by tag in all notebooks"),
+                             QStringLiteral("find --scope all_notebook --object tag")));
+    return aliases;
+  }();
+  return c_aliases;
 }

@@ -68,6 +68,14 @@ than pumping the primary event loop while waiting for that marker.
 Notification backlog fixtures must wait for the scroll range to match the complete
 height-for-width layout before scrolling to the bottom. A merely positive range can still
 describe earlier rows while `QScrollArea` has a queued layout update, especially on Cocoa.
+
+Mind-map autosave fixtures allow two three-second ticks: committing the active draft can
+change its revision during capture, so snapshot admission defers persistence to the next tick.
+Keep the focus, selection, caret and disk-content assertions; do not weaken revision checks.
+
+Tag badge resize fixtures use the 99-to-100 boundary. The minimum circular badge can make
+9 and 10 equally wide with native fonts; wait for both column and scrollbar remeasurement.
+
 ## Test Structure
 
 ```
@@ -118,6 +126,21 @@ void TestMyService::initTestCase() {
 Encryption fixtures created by `prepare_notebook` / `commit_notebook` are self-contained v2
 notes. Reopen them with `vxcore_encryption_unlock_note`, using the notebook-relative path
 captured before closing the buffer; `unlock_notebook` is only for explicit legacy-vault tests.
+
+## Shared real-window test environment
+
+After initializing an isolated `ConfigMgr2`, real-window fixtures apply
+`TestEnvironment` from `helpers/test_environment.h` before constructing or showing views:
+
+```cpp
+TestEnvironment{}.apply(*config);
+```
+
+Its `m_markdownExperiencePromptEnabled` flag defaults to `false`, suppressing the one-time
+**Choose Markdown Editing Experience** dialog. Only tests exercising that dialog explicitly
+set the flag to `true` and apply it before showing the view. The helper maps this option to
+`SessionConfig::hasConfirmedMarkdownEditorConcealment`; production behavior is unchanged.
+It does not replace `vxcore_set_test_mode(1)` or disposable data/profile setup.
 
 ## Writing Service Tests
 
@@ -187,6 +210,16 @@ cmake --build build --config Release --target test_error test_exception test_pat
 | `core_configs` | Config classes (ConfigMgr2, MainConfig, SessionConfig, etc.) | core_services, VTextEdit |
 
 `core_services` links **neither `Qt::Widgets` nor `VTextEdit`** — see [`../src/core/services/AGENTS.md`](../src/core/services/AGENTS.md#core_services-is-qt-widgets-free-and-vtextedit-free-contract). Practical consequence for tests: a target that needs QtWidgets or vtextedit headers must say so in its own `LINKS`; nothing arrives transitively through `core_services` any more.
+
+`test_viewsplit2_reload_menu`, `test_view_window2_readonly_toolbar` and
+`test_view_window2_readonly_save_warning` use the existing application-source recipe in
+`widgets/CMakeLists.txt` to execute production `ViewWindow2` methods. Do not restore
+test-local copies of `reload()`, `save()`, `addAction()` or the read-only warning logic,
+or add vtable stubs when the base interface changes. Warning fixtures drive real
+`Buffer2::save()` and `BufferService::markDirty()` rejections; suppress only the modal,
+not the cooldown or buffer-ID filtering. Reload fixtures retain position observers
+and unregister active writers before destruction; native dialogs can trigger focus-driven
+editor synchronization, so dirty reload checks assert buffer and disk outcomes.
 
 ## Run Tests
 
@@ -344,16 +377,26 @@ ConfigMgr2, and prune only in the test class `init()`, never inside `Fixture::in
 intra-row fixture recreation intentionally tests persisted sessions. This suite must not edit
 installed assets, including `web/css/user.css` or user-created templates; asset-customization
 fixtures must retain the full test-directory reset. Keep the existing suite deadlines.
+CTest explicitly requests text output and `test_viewarea_tab_reuse.xml` (JUnit) in the test's
+working directory, so Windows GUI logging cannot discard the failed assertion report.
 
 On macOS, CTest marks the entire `test_viewarea_tab_reuse` and
 `test_typstviewwindow_insertion` tests `DISABLED`, including their previously passing rows.
 Both targets still compile. Repeated Cocoa focus/input failures and the tab-reuse SIGBUS
 ([example job](https://github.com/vnotex/vnote/actions/runs/41394392636/job/125112492727))
-remain unresolved; this exclusion is not a product fix. Typst cleanup/resources, controller,
-export and native-editor tests remain enabled. Windows/Linux registration is unchanged.
-This CTest-only exclusion does not affect direct executable launches, add `QSKIP`, weaken
+remain unresolved; this exclusion is not a product fix.
+
+On Linux, CTest also disables the entire `test_viewarea_tab_reuse` suite, while still building
+it. Runs [42634819018](https://github.com/vnotex/vnote/actions/runs/42634819018) and
+[42737330602](https://github.com/vnotex/vnote/actions/runs/42737330602), including diagnostic
+reruns, hit its 1200-second deadline after focus/outline-readiness failures. The underlying
+Linux cause is unconfirmed; disabling the suite is not evidence that these behaviors work.
+
+Windows registrations and Linux Typst insertion remain enabled. Typst cleanup/resources,
+controller, export and native-editor tests remain enabled on all platforms.
+These CTest-only exclusions do not affect direct executable launches, add `QSKIP`, weaken
 assertions, change deadlines, or relax the separate local Windows whitelist below.
-Re-enable after the failures are fixed and verified on native macOS.
+Re-enable each platform after its failures are fixed and verified on that native platform.
 
 PDF.js text-item boundaries are not word boundaries: ligatures can split a word across
 items. Reconstruct text by concatenating `item.str` and adding a newline only for

@@ -94,11 +94,13 @@
 #include <widgets/dialogs/selectdialog.h>
 #include <widgets/editors/statusbar.h>
 #include <widgets/imageviewer.h>
+#include <widgets/outlineprovider.h>
 #include <widgets/typstviewwindow.h>
 
 #include <atomic>
 #include <functional>
 #include <memory>
+#include <stdexcept>
 #include <thread>
 
 using namespace vnotex;
@@ -883,6 +885,22 @@ private slots:
   void initTestCase();
   void init();
   void cleanup();
+  void outlineMoveAndUndo_data();
+  void outlineMoveAndUndo();
+  void outlineHiddenBoundaries_data();
+  void outlineHiddenBoundaries();
+  void outlineUnsupportedSources_data();
+  void outlineUnsupportedSources();
+  void outlineLiveGuardsAndInvalidation();
+  void outlineReadOnlyBuffer();
+  void outlineSourceRename_data();
+  void outlineSourceRename();
+  void outlineSourceInsertAndHistory();
+  void outlineSourceHiddenInsertion();
+  void outlineSourcePublicationOrdering();
+  void outlineSourceCompileFailureUndo();
+  void outlineSourceUnsupportedPublicationUndo();
+  void outlineSourceWriterGuards();
   void statusPlacementFollowsMode();
   void memoryBodyRendersWithoutFileWrites_data();
   void memoryBodyRendersWithoutFileWrites();
@@ -1174,6 +1192,562 @@ void TestTypstViewWindowInsertion::show(const Buffer2 &buffer) {
   m_edit->setFocus();
   QCoreApplication::processEvents();
 }
+void TestTypstViewWindowInsertion::outlineMoveAndUndo_data() {
+  QTest::addColumn<int>("level");
+  QTest::addColumn<bool>("asChild");
+  QTest::addColumn<bool>("overridden");
+  QTest::newRow("basic") << 1 << false << false;
+  QTest::newRow("deep") << 8 << false << false;
+  QTest::newRow("deep-reparent") << 8 << true << false;
+  QTest::newRow("overridden-selection") << 1 << true << true;
+}
+
+void TestTypstViewWindowInsertion::outlineMoveAndUndo() {
+  QFETCH(int, level);
+  QFETCH(bool, asChild);
+  QFETCH(bool, overridden);
+  const auto prefix = QStringLiteral("Intro\n");
+  const auto section = QString(level, QLatin1Char('=')) + QStringLiteral(" Alpha\nalpha body\n") +
+                       QString(level + 1, QLatin1Char('=')) +
+                       QStringLiteral(" Child\nchild body\n");
+  const auto target = QString(level, QLatin1Char('=')) + QStringLiteral(" Omega\nomega body\n");
+  const auto original = prefix + section + target;
+  show(openNote(QStringLiteral("main.typst"), original));
+  QVERIFY(ready());
+  const auto provider = m_window->getOutlineProvider();
+  QVERIFY(provider->getOutline()->m_reorderSupported);
+  QCOMPARE(m_editor->getSourceHeadings().size(), 3);
+  QVERIFY(provider->getOutline()->m_maxLevel > 6);
+  const auto move = provider->getOutline()->planMove(
+      0, 2, asChild ? OutlineDropPosition::OnItem : OutlineDropPosition::BelowItem);
+  QVERIFY(move.isValid());
+  const int selectedStart = original.indexOf(QStringLiteral("alpha body"));
+  QTextCursor cursor(m_edit->document());
+  cursor.setPosition(selectedStart + 10);
+  if (!overridden)
+    cursor.setPosition(selectedStart, QTextCursor::KeepAnchor);
+  m_edit->setTextCursor(cursor);
+  if (overridden)
+    m_edit->setOverriddenSelection(selectedStart, selectedStart + 10);
+  m_edit->document()->clearUndoRedoStacks();
+  provider->requestMove(move);
+  const int resultLevel = level + (asChild ? 1 : 0);
+  const auto expected = prefix + target + QString(resultLevel, QLatin1Char('=')) +
+                        QStringLiteral(" Alpha\nalpha body\n") +
+                        QString(resultLevel + 1, QLatin1Char('=')) +
+                        QStringLiteral(" Child\nchild body\n");
+  QCOMPARE(m_edit->toPlainText(), expected);
+  QCOMPARE(m_edit->selectedText(), QStringLiteral("alpha body"));
+  if (!overridden)
+    QVERIFY(m_edit->textCursor().position() < m_edit->textCursor().anchor());
+  QVERIFY(m_edit->document()->isModified());
+  QVERIFY(m_editor->getSourceHeadings().isEmpty());
+  QVERIFY(!provider->getOutline()->m_reorderSupported);
+  m_edit->undo();
+  QCOMPARE(m_edit->toPlainText(), original);
+  QVERIFY(!m_edit->document()->isUndoAvailable());
+}
+
+void TestTypstViewWindowInsertion::outlineHiddenBoundaries_data() {
+  QTest::addColumn<QString>("body");
+  QTest::addColumn<QString>("expected");
+  QTest::addColumn<int>("target");
+  QTest::addColumn<bool>("asChild");
+  QTest::newRow("hidden-peer-not-swallowed")
+      << QStringLiteral("= Alpha\nalpha\n= Hidden\nhidden\n= Omega\nomega\n")
+      << QStringLiteral("= Hidden\nhidden\n= Omega\nomega\n= Alpha\nalpha\n") << 1 << false;
+  QTest::newRow("hidden-descendant-carried")
+      << QStringLiteral("= Alpha\nalpha\n== Hidden\nhidden\n= Omega\nomega\n")
+      << QStringLiteral("= Omega\nomega\n= Alpha\nalpha\n== Hidden\nhidden\n") << 1 << false;
+  QTest::newRow("inconsistent-visible-subtree")
+      << QStringLiteral("= Alpha\nalpha\n= Hidden\nhidden\n== Child\nchild\n= Omega\nomega\n")
+      << QString() << 2 << false;
+  QTest::newRow("hidden-destination-parent")
+      << QStringLiteral("= Alpha\nalpha\n= Hidden\nhidden\n= Omega\nomega\n") << QString() << 1
+      << true;
+}
+
+void TestTypstViewWindowInsertion::outlineHiddenBoundaries() {
+  QFETCH(QString, body);
+  QFETCH(QString, expected);
+  QFETCH(int, target);
+  QFETCH(bool, asChild);
+  const auto prefix =
+      QStringLiteral("#show heading.where(body: [Hidden]): set heading(outlined: false)\n");
+  const auto original = prefix + body;
+  show(openNote(QStringLiteral("main.typst"), original));
+  QVERIFY(ready());
+  const auto provider = m_window->getOutlineProvider();
+  QVERIFY(provider->getOutline()->m_reorderSupported);
+  QCOMPARE(m_editor->getSourceHeadings().size(), m_editor->getHeadings().size() + 1);
+  // In the parent mismatch row move Omega onto Alpha; otherwise append Alpha after Omega.
+  const auto move = provider->getOutline()->planMove(asChild ? target : 0, asChild ? 0 : target,
+                                                     asChild ? OutlineDropPosition::OnItem
+                                                             : OutlineDropPosition::BelowItem);
+  QVERIFY(move.isValid());
+  m_edit->document()->clearUndoRedoStacks();
+  provider->requestMove(move);
+  if (expected.isEmpty()) {
+    QCOMPARE(m_edit->toPlainText(), original);
+    QVERIFY(!m_edit->document()->isUndoAvailable());
+  } else {
+    QCOMPARE(m_edit->toPlainText(), prefix + expected);
+    m_edit->undo();
+    QCOMPARE(m_edit->toPlainText(), original);
+    QVERIFY(!m_edit->document()->isUndoAvailable());
+  }
+}
+
+void TestTypstViewWindowInsertion::outlineUnsupportedSources_data() {
+  QTest::addColumn<QString>("body");
+  QTest::newRow("nested") << QStringLiteral("#[\n== Nested\n]\n");
+  QTest::newRow("generated-hidden") << QStringLiteral("#heading(outlined: false)[Hidden]\n");
+  QTest::newRow("generated-visible") << QStringLiteral("#heading[Generated]\n");
+  QTest::newRow("imported") << QStringLiteral("#include \"chapter.typ\"\n");
+  QTest::newRow("repeated") << QStringLiteral("#for i in range(2) [\n== Repeated\n]\n");
+  QTest::newRow("indirect-make") << QStringLiteral("#let make() = [\n== Defined\n]\n#make()\n");
+  QTest::newRow("indirect-for") << QStringLiteral(
+      "#let make() = heading(outlined: false)[Hidden]\n#for i in range(2) { make() }\n");
+}
+
+void TestTypstViewWindowInsertion::outlineUnsupportedSources() {
+  QFETCH(QString, body);
+  const auto original =
+      QStringLiteral("= Alpha\nalpha\n") + body + QStringLiteral("= Omega\nomega\n");
+  const auto buffer = openNote(QStringLiteral("main.typst"), original);
+  QVERIFY(buffer.isValid());
+  QVERIFY(
+      writeBytes(QFileInfo(buffer.resolvedPath()).absolutePath() + QStringLiteral("/chapter.typ"),
+                 QByteArrayLiteral("== Imported\n")));
+  show(buffer);
+  QVERIFY(ready());
+  const auto provider = m_window->getOutlineProvider();
+  QVERIFY(provider->getOutline()->m_headings.size() >= 2);
+  QVERIFY(m_editor->getSourceHeadings().isEmpty());
+  QVERIFY(!provider->getOutline()->m_reorderSupported);
+  for (const auto &heading : provider->getOutline()->m_headings)
+    QVERIFY(!heading.m_reorderable);
+  m_edit->document()->clearUndoRedoStacks();
+  provider->requestMove({0, -1, 1, -1});
+  QCOMPARE(m_edit->toPlainText(), original);
+  QVERIFY(!m_edit->document()->isUndoAvailable());
+}
+
+void TestTypstViewWindowInsertion::outlineReadOnlyBuffer() {
+  const auto original = QStringLiteral("= Alpha\nalpha\n= Omega\nomega\n");
+  show(openNote(QStringLiteral("main.typst"), original, true));
+  QVERIFY(ready());
+  const auto provider = m_window->getOutlineProvider();
+  QCOMPARE(m_editor->getSourceHeadings().size(), 2);
+  QVERIFY(!provider->getOutline()->m_reorderSupported);
+  // Native permission alone cannot override the live host buffer policy.
+  m_editor->setReadOnly(false);
+  QVERIFY(!provider->getOutline()->m_reorderSupported);
+  m_edit->document()->clearUndoRedoStacks();
+  provider->requestMove({0, -1, 1, -1});
+  QCOMPARE(m_edit->toPlainText(), original);
+  QVERIFY(!m_edit->document()->isUndoAvailable());
+}
+
+void TestTypstViewWindowInsertion::outlineLiveGuardsAndInvalidation() {
+  const auto original = QStringLiteral("= Alpha\nalpha\n= Omega\nomega\n");
+  show(openNote(QStringLiteral("main.typst"), original));
+  QVERIFY(ready());
+  const auto provider = m_window->getOutlineProvider();
+  QVERIFY(provider->getOutline()->m_reorderSupported);
+  const auto move = provider->getOutline()->planMove(0, 1, OutlineDropPosition::BelowItem);
+  QVERIFY(move.isValid());
+  m_edit->document()->clearUndoRedoStacks();
+  const auto rejected = [&] {
+    QVERIFY(!provider->getOutline()->m_reorderSupported);
+    provider->requestMove(move);
+    QCOMPARE(m_edit->toPlainText(), original);
+    QVERIFY(!m_edit->document()->isUndoAvailable());
+  };
+  m_editor->setReadOnly(true);
+  rejected();
+  m_editor->setReadOnly(false);
+  QVERIFY(provider->getOutline()->m_reorderSupported);
+  m_edit->setReadOnly(true);
+  rejected();
+  m_edit->setReadOnly(false);
+  QVERIFY(provider->getOutline()->m_reorderSupported);
+  m_window->setMode(ViewWindowMode::Read);
+  rejected();
+  m_window->setMode(ViewWindowMode::Edit);
+  QVERIFY(provider->getOutline()->m_reorderSupported);
+  m_window->setEnabled(false);
+  rejected();
+  m_window->setEnabled(true);
+  QVERIFY(provider->getOutline()->m_reorderSupported);
+
+  QTextCursor cursor(m_edit->document());
+  cursor.movePosition(QTextCursor::End);
+  cursor.insertText(QStringLiteral("edited"));
+  QVERIFY(m_editor->getSourceHeadings().isEmpty());
+  QVERIFY(!provider->getOutline()->m_reorderSupported);
+  provider->requestMove(move);
+  QCOMPARE(m_edit->toPlainText(), original + QStringLiteral("edited"));
+  m_edit->undo();
+  QCOMPARE(m_edit->toPlainText(), original);
+  QVERIFY(ready());
+  QVERIFY(provider->getOutline()->m_reorderSupported);
+  m_editor->setFileOverlay(m_editor->activeFile(), QStringLiteral("= Broken\n#let x = ("));
+  QVERIFY(m_editor->getSourceHeadings().isEmpty());
+  QVERIFY(!provider->getOutline()->m_reorderSupported);
+  provider->requestMove(move);
+  QCOMPARE(m_edit->toPlainText(), QStringLiteral("= Broken\n#let x = ("));
+}
+
+void TestTypstViewWindowInsertion::outlineSourceRename_data() {
+  QTest::addColumn<QString>("heading");
+  QTest::addColumn<QString>("renamed");
+  QTest::newRow("direct-label-comments")
+      << QStringLiteral("= *Formatted* /* first */ old /* second */ title #label(\"direct\")\n")
+      << QStringLiteral("= %1/* first *//* second */#label(\"direct\")\n");
+  QTest::newRow("ordinary-label-outside-body")
+      << QStringLiteral("= _Other_ <ordinary> // following comment\n")
+      << QStringLiteral("= %1 <ordinary> // following comment\n");
+  QTest::newRow("internal-line-comment")
+      << QStringLiteral("= *Wrapped // internal line\ncontinued* /* middle */ end\n")
+      << QStringLiteral("= %1// internal line\n/* middle */\n");
+}
+
+void TestTypstViewWindowInsertion::outlineSourceRename() {
+  QFETCH(QString, heading);
+  QFETCH(QString, renamed);
+  const auto preamble = QString::fromUtf8("// \xf0\x9f\x98\x80 preamble\n");
+  const auto body = QStringLiteral("First body\n== Child\nChild body\n= Omega\nLast body\n");
+  const auto original = preamble + heading + body;
+  show(openNote(QStringLiteral("main.typst"), original));
+  QVERIFY(ready());
+  m_edit->document()->clearUndoRedoStacks();
+  // The actual preview caller is unfocused; the source adapter must not activate it.
+  QLineEdit preview;
+  preview.show();
+  preview.activateWindow();
+  QApplication::setActiveWindow(&preview);
+  preview.setFocus();
+  QVERIFY(QTest::qWaitFor([&] { return preview.hasFocus(); }, 5000));
+  const auto snapshot = m_window->outlineSourceSnapshot();
+  QVERIFY(snapshot.m_revision >= 0);
+  OutlineSourceEdit request;
+  request.m_kind = OutlineSourceEdit::Kind::Rename;
+  request.m_placement.m_sourceHeadingIndex = 0;
+  request.m_topic = QStringLiteral("Literal \"quote\" \\ [x] # Ω");
+  request.m_expectedRevision = snapshot.m_revision;
+  request.m_expectedFingerprint = snapshot.m_outline->navigationFingerprint();
+  const auto receipt = m_window->applyOutlineSourceEdit(request, false);
+  QVERIFY(receipt);
+  QVERIFY(preview.hasFocus());
+  const auto expected =
+      preamble + renamed.arg(QStringLiteral("#\"Literal \\\"quote\\\" \\\\ [x] # Ω\"")) + body;
+  QCOMPARE(m_edit->toPlainText(), expected);
+  QVERIFY(receipt->m_pending);
+  QVERIFY(QTest::qWaitFor([&] { return !receipt->m_pending; }, 12000));
+  QVERIFY(!receipt->m_stale);
+  QCOMPARE(m_window->getOutlineProvider()->getOutline()->m_headings.at(0).m_name, request.m_topic);
+  QCOMPARE(receipt->m_afterHeadingPositions.size(), 3);
+  QVERIFY(m_window->outlineSourceSnapshot().m_contentGeneration > snapshot.m_contentGeneration);
+  QVERIFY(receipt->m_undo());
+  QCOMPARE(m_edit->toPlainText(), original);
+  QVERIFY(!m_edit->document()->isUndoAvailable());
+  QVERIFY(QTest::qWaitFor([&] { return !receipt->m_pending; }, 12000));
+  QVERIFY(!receipt->m_stale);
+  QVERIFY(receipt->m_redo());
+  QCOMPARE(m_edit->toPlainText(), expected);
+  QVERIFY(QTest::qWaitFor([&] { return !receipt->m_pending; }, 12000));
+  QVERIFY(!receipt->m_stale);
+}
+
+void TestTypstViewWindowInsertion::outlineSourceInsertAndHistory() {
+  const auto original =
+      QStringLiteral("// preamble\n======== Parent <parent> // stays with parent\nParent body\n"
+                     "========= Child\nChild body\n======== Peer\nPeer body\n");
+  show(openNote(QStringLiteral("main.typst"), original));
+  QVERIFY(ready());
+  m_edit->document()->clearUndoRedoStacks();
+  const auto apply = [&](OutlineSourceEdit::Kind kind, const OutlineMove &placement,
+                         const QString &topic) {
+    const auto snapshot = m_window->outlineSourceSnapshot();
+    OutlineSourceEdit request;
+    request.m_kind = kind;
+    request.m_placement = placement;
+    request.m_topic = topic;
+    request.m_expectedRevision = snapshot.m_revision;
+    request.m_expectedFingerprint = snapshot.m_outline->navigationFingerprint();
+    return m_window->applyOutlineSourceEdit(request, false);
+  };
+  QVector<QSharedPointer<OutlineSourceEditReceipt>> history;
+  QStringList sources{original};
+  // Append an empty child after the full existing child subtree, before Peer.
+  auto receipt = apply(OutlineSourceEdit::Kind::Insert, {-1, 2, 9, 0}, QString());
+  QVERIFY(receipt);
+  history.append(receipt);
+  sources.append(m_edit->toPlainText());
+  QVERIFY(
+      sources.last().contains(QStringLiteral("Child body\n\n========= #\"\"\n\n======== Peer")));
+  QVERIFY(sources.last().contains(QStringLiteral("<parent> // stays with parent\nParent body")));
+  QVERIFY(QTest::qWaitFor([&] { return !receipt->m_pending; }, 12000));
+  QVERIFY(!receipt->m_stale);
+  QCOMPARE(m_window->getOutlineProvider()->getOutline()->m_headings.at(2).m_name, QString());
+  receipt = apply(OutlineSourceEdit::Kind::Rename, {2, -1, -1, -1}, QStringLiteral("Added"));
+  QVERIFY(receipt);
+  history.append(receipt);
+  sources.append(m_edit->toPlainText());
+  QVERIFY(QTest::qWaitFor([&] { return !receipt->m_pending; }, 12000));
+  QVERIFY(!receipt->m_stale);
+  auto move =
+      m_window->getOutlineProvider()->getOutline()->planMove(0, 3, OutlineDropPosition::BelowItem);
+  QVERIFY(move.isValid());
+  receipt = apply(OutlineSourceEdit::Kind::Move, move, QString());
+  QVERIFY(receipt);
+  history.append(receipt);
+  sources.append(m_edit->toPlainText());
+  QVERIFY(sources.last().indexOf(QStringLiteral("======== Peer")) <
+          sources.last().indexOf(QStringLiteral("======== Parent")));
+  QVERIFY(QTest::qWaitFor([&] { return !receipt->m_pending; }, 12000));
+  QVERIFY(!receipt->m_stale);
+  receipt = apply(OutlineSourceEdit::Kind::Rename, {1, -1, -1, -1}, QStringLiteral("Renamed"));
+  QVERIFY(receipt);
+  history.append(receipt);
+  sources.append(m_edit->toPlainText());
+  QVERIFY(QTest::qWaitFor([&] { return !receipt->m_pending; }, 12000));
+  QVERIFY(!receipt->m_stale);
+  QVERIFY(m_buffers->syncNow(m_window->getBuffer().id()));
+  QVERIFY(m_window->outlineSourceSnapshot().m_revision >= 0);
+  for (int i = history.size() - 1; i >= 0; --i) {
+    QVERIFY(history.at(i)->m_undo());
+    QCOMPARE(m_edit->toPlainText(), sources.at(i));
+    QVERIFY(QTest::qWaitFor([&] { return !history.at(i)->m_pending; }, 12000));
+    QVERIFY(!history.at(i)->m_stale);
+  }
+  QVERIFY(!m_edit->document()->isUndoAvailable());
+  for (int i = 0; i < history.size(); ++i) {
+    QVERIFY(history.at(i)->m_redo());
+    QCOMPARE(m_edit->toPlainText(), sources.at(i + 1));
+    QVERIFY(QTest::qWaitFor([&] { return !history.at(i)->m_pending; }, 12000));
+    QVERIFY(!history.at(i)->m_stale);
+  }
+  // Later independent text is never consumed by a preview command, even when
+  // ordinary Undo brings the numeric undo-step count back to the same boundary.
+  QTextCursor cursor(m_edit->document());
+  cursor.movePosition(QTextCursor::End);
+  cursor.beginEditBlock();
+  cursor.insertText(QStringLiteral("Independent body edit"));
+  cursor.endEditBlock();
+  QVERIFY(!history.last()->m_undo());
+  m_edit->undo();
+  QCOMPARE(m_edit->toPlainText(), sources.last());
+  QVERIFY(!history.last()->m_undo());
+}
+
+void TestTypstViewWindowInsertion::outlineSourceHiddenInsertion() {
+  const auto original =
+      QStringLiteral("#show heading.where(body: [Hidden]): set heading(outlined: false)\n"
+                     "= Alpha\nalpha\n= Hidden\nhidden\n= Omega\nomega\n");
+  show(openNote(QStringLiteral("main.typst"), original));
+  QVERIFY(ready());
+  const auto snapshot = m_window->outlineSourceSnapshot();
+  QVERIFY(snapshot.m_revision >= 0);
+  OutlineSourceEdit request;
+  request.m_kind = OutlineSourceEdit::Kind::Insert;
+  request.m_placement = {-1, 1, 2, 0};
+  request.m_topic = QStringLiteral("Child");
+  request.m_expectedRevision = snapshot.m_revision;
+  request.m_expectedFingerprint = snapshot.m_outline->navigationFingerprint();
+  m_edit->document()->clearUndoRedoStacks();
+  // The visible Alpha subtree appears to end at Omega; Hidden is the actual parent.
+  QVERIFY(!m_window->applyOutlineSourceEdit(request, false));
+  QCOMPARE(m_edit->toPlainText(), original);
+  QVERIFY(!m_edit->document()->isUndoAvailable());
+  // A root sibling at that boundary is valid and retains Hidden in the receipt.
+  request.m_placement.m_targetLevel = 1;
+  request.m_placement.m_parentHeadingIndex = -1;
+  const auto receipt = m_window->applyOutlineSourceEdit(request, false);
+  QVERIFY(receipt);
+  QCOMPARE(receipt->m_beforeVisibleHeadings, QVector<bool>({true, false, true}));
+  QCOMPARE(receipt->m_afterVisibleHeadings, QVector<bool>({true, false, true, true}));
+  QVERIFY(QTest::qWaitFor([&] { return !receipt->m_pending; }, 12000));
+  QVERIFY(!receipt->m_stale);
+  QVERIFY(receipt->m_undo());
+  QCOMPARE(m_edit->toPlainText(), original);
+}
+
+void TestTypstViewWindowInsertion::outlineSourcePublicationOrdering() {
+  show(openNote(QStringLiteral("main.typst"), QStringLiteral("= Alpha\nbody\n= Beta\nbody\n")));
+  QVERIFY(ready());
+  RuntimeLaneGate gate(*m_runtime);
+  QVERIFY(gate.entered());
+  const auto snapshot = m_window->outlineSourceSnapshot();
+  QVERIFY(snapshot.m_revision >= 0);
+  OutlineSourceEdit request;
+  request.m_kind = OutlineSourceEdit::Kind::Rename;
+  request.m_placement.m_sourceHeadingIndex = 0;
+  request.m_topic = QStringLiteral("Renamed");
+  request.m_expectedRevision = snapshot.m_revision;
+  request.m_expectedFingerprint = snapshot.m_outline->navigationFingerprint();
+  bool invalidationBeforeCompiling = false;
+  bool readyBeforePublication = false;
+  QSharedPointer<OutlineSourceEditReceipt> receipt;
+  QObject lifetime;
+  connect(m_editor, &vte::VTypstEditor::headingsUpdated, &lifetime,
+          [&](const QVector<vte::TypstHeadingInfo> &headings) {
+            if (headings.isEmpty() && m_window->isOutlineSourceEditBusy()) {
+              invalidationBeforeCompiling |=
+                  m_editor->compileStatus() == vte::VTypstEditor::CompileStatus::Ready;
+              QVERIFY(m_window->outlineSourceSnapshot().m_revision < 0);
+            }
+          });
+  connect(m_editor, &vte::VTypstEditor::compileStatusChanged, &lifetime,
+          [&](vte::VTypstEditor::CompileStatus status, const QString &) {
+            if (status == vte::VTypstEditor::CompileStatus::Ready && receipt) {
+              readyBeforePublication = receipt->m_pending;
+              QVERIFY(m_window->outlineSourceSnapshot().m_revision < 0);
+            }
+          });
+  receipt = m_window->applyOutlineSourceEdit(request, false);
+  QVERIFY(receipt);
+  QVERIFY(invalidationBeforeCompiling);
+  QVERIFY(receipt->m_pending);
+  QCOMPARE(receipt->m_compilationEpoch, m_editor->compilationEpoch());
+  QCOMPARE(receipt->m_compilationGeneration, m_editor->compilationGeneration());
+  QVERIFY(!m_window->applyOutlineSourceEdit(request, false));
+  const auto firstGeneration = receipt->m_compilationGeneration;
+  // Undo/redo supersedes the queued compile while retaining the same source group.
+  QVERIFY(receipt->m_undo());
+  QVERIFY(receipt->m_redo());
+  QVERIFY(receipt->m_compilationGeneration > firstGeneration);
+  QVERIFY(receipt->m_pending);
+  gate.release();
+  QVERIFY(QTest::qWaitFor([&] { return !receipt->m_pending; }, 12000));
+  QVERIFY(readyBeforePublication);
+  QVERIFY(!receipt->m_stale);
+  QCOMPARE(m_window->getOutlineProvider()->getOutline()->m_headings.first().m_name,
+           QStringLiteral("Renamed"));
+}
+
+void TestTypstViewWindowInsertion::outlineSourceCompileFailureUndo() {
+  const auto original = QStringLiteral("= Alpha\n#let value = 42\n= Beta\n#value\n");
+  show(openNote(QStringLiteral("main.typst"), original));
+  QVERIFY(ready());
+  const auto snapshot = m_window->outlineSourceSnapshot();
+  QVERIFY(snapshot.m_revision >= 0);
+  OutlineSourceEdit request;
+  request.m_kind = OutlineSourceEdit::Kind::Move;
+  request.m_placement = snapshot.m_outline->planMove(0, 1, OutlineDropPosition::BelowItem);
+  request.m_expectedRevision = snapshot.m_revision;
+  request.m_expectedFingerprint = snapshot.m_outline->navigationFingerprint();
+  m_edit->document()->clearUndoRedoStacks();
+  const auto receipt = m_window->applyOutlineSourceEdit(request, false);
+  QVERIFY(receipt);
+  const auto broken = QStringLiteral("= Beta\n#value\n= Alpha\n#let value = 42\n");
+  QCOMPARE(m_edit->toPlainText(), broken);
+  QVERIFY(QTest::qWaitFor([&] { return !receipt->m_pending; }, 12000));
+  QVERIFY(receipt->m_stale);
+  QCOMPARE(m_editor->compileStatus(), vte::VTypstEditor::CompileStatus::Error);
+  QVERIFY(m_window->outlineSourceSnapshot().m_revision < 0);
+  QVERIFY(!m_window->applyOutlineSourceEdit(request, false));
+  // Failure does not roll back accepted bytes, nor revoke this exact paired Undo.
+  QCOMPARE(m_edit->toPlainText(), broken);
+  QVERIFY(receipt->m_undo());
+  QCOMPARE(m_edit->toPlainText(), original);
+  QVERIFY(!m_edit->document()->isUndoAvailable());
+  QVERIFY(QTest::qWaitFor([&] { return !receipt->m_pending; }, 12000));
+  QVERIFY(!receipt->m_stale);
+  QVERIFY(m_window->outlineSourceSnapshot().m_revision >= 0);
+  QVERIFY(receipt->m_redo());
+  QCOMPARE(m_edit->toPlainText(), broken);
+  QVERIFY(QTest::qWaitFor([&] { return !receipt->m_pending; }, 12000));
+  QVERIFY(receipt->m_stale);
+}
+
+void TestTypstViewWindowInsertion::outlineSourceUnsupportedPublicationUndo() {
+  const auto original =
+      QStringLiteral("#show heading.where(body: [Hidden]): set heading(outlined: false)\n"
+                     "= Visible\nBody\n");
+  show(openNote(QStringLiteral("main.typst"), original));
+  QVERIFY(ready());
+  const auto snapshot = m_window->outlineSourceSnapshot();
+  QVERIFY(snapshot.m_revision >= 0);
+  OutlineSourceEdit request;
+  request.m_kind = OutlineSourceEdit::Kind::Rename;
+  request.m_placement.m_sourceHeadingIndex = 0;
+  request.m_topic = QStringLiteral("Hidden");
+  request.m_expectedRevision = snapshot.m_revision;
+  request.m_expectedFingerprint = snapshot.m_outline->navigationFingerprint();
+  m_edit->document()->clearUndoRedoStacks();
+  const auto receipt = m_window->applyOutlineSourceEdit(request, false);
+  QVERIFY(receipt);
+  QVERIFY(QTest::qWaitFor([&] { return !receipt->m_pending; }, 12000));
+  QCOMPARE(m_editor->compileStatus(), vte::VTypstEditor::CompileStatus::Ready);
+  QVERIFY(m_editor->getHeadings().isEmpty());
+  QVERIFY(receipt->m_stale);
+  QVERIFY(m_edit->toPlainText().contains(QStringLiteral("= #\"Hidden\"")));
+  QVERIFY(m_window->outlineSourceSnapshot().m_revision < 0);
+  QVERIFY(!m_window->applyOutlineSourceEdit(request, false));
+  QVERIFY(receipt->m_undo());
+  QCOMPARE(m_edit->toPlainText(), original);
+  QVERIFY(QTest::qWaitFor([&] { return !receipt->m_pending; }, 12000));
+  QVERIFY(!receipt->m_stale);
+  QVERIFY(m_window->outlineSourceSnapshot().m_revision >= 0);
+  QCOMPARE(m_editor->getHeadings().first().m_title, QStringLiteral("Visible"));
+}
+
+void TestTypstViewWindowInsertion::outlineSourceWriterGuards() {
+  const auto original = QStringLiteral("= Alpha\nbody\n= Beta\nbody\n");
+  show(openNote(QStringLiteral("main.typst"), original));
+  QVERIFY(ready());
+  const auto snapshot = m_window->outlineSourceSnapshot();
+  QVERIFY(snapshot.m_revision >= 0);
+  OutlineSourceEdit request;
+  request.m_kind = OutlineSourceEdit::Kind::Rename;
+  request.m_placement.m_sourceHeadingIndex = 0;
+  request.m_topic = QStringLiteral("Renamed");
+  request.m_expectedRevision = snapshot.m_revision;
+  request.m_expectedFingerprint = snapshot.m_outline->navigationFingerprint();
+  const auto bufferId = m_window->getBuffer().id();
+  const auto ownKey = reinterpret_cast<quintptr>(m_window.get());
+  const auto otherKey = reinterpret_cast<quintptr>(this);
+  const auto rejected = [&] {
+    QVERIFY(m_window->outlineSourceSnapshot().m_revision < 0);
+    QVERIFY(!m_window->applyOutlineSourceEdit(request, false));
+    QCOMPARE(m_edit->toPlainText(), original);
+  };
+  m_buffers->unregisterActiveWriter(bufferId, ownKey);
+  rejected();
+  m_buffers->registerActiveWriter(
+      bufferId, otherKey, []() -> QString { throw std::runtime_error("writer unavailable"); });
+  rejected();
+  m_buffers->registerActiveWriter(bufferId, otherKey, [] { return QStringLiteral("other split"); });
+  rejected();
+  m_buffers->registerActiveWriter(bufferId, ownKey,
+                                  [this] { return m_window->getLatestContent(); });
+  m_window->setNoteConversionFrozen(true);
+  rejected();
+  m_window->setNoteConversionFrozen(false);
+  m_window->setMode(ViewWindowMode::Read);
+  rejected();
+  m_window->setMode(ViewWindowMode::Edit);
+  m_buffers->registerActiveWriter(bufferId, ownKey,
+                                  [this] { return m_window->getLatestContent(); });
+  // Restore current format-only document revision without changing the source identity.
+  request.m_expectedRevision = m_window->outlineSourceSnapshot().m_revision;
+  QVERIFY(request.m_expectedRevision >= 0);
+  const auto receipt = m_window->applyOutlineSourceEdit(request, false);
+  QVERIFY(receipt);
+  QVERIFY(QTest::qWaitFor([&] { return !receipt->m_pending; }, 12000));
+  QVERIFY(!receipt->m_stale);
+  m_buffers->registerActiveWriter(bufferId, otherKey, [] { return QStringLiteral("other split"); });
+  QVERIFY(!receipt->m_undo());
+  m_buffers->registerActiveWriter(bufferId, ownKey,
+                                  [this] { return m_window->getLatestContent(); });
+  QVERIFY(receipt->m_undo());
+  QCOMPARE(m_edit->toPlainText(), original);
+  m_window.reset();
+  QVERIFY(!receipt->m_redo());
+}
+
 void TestTypstViewWindowInsertion::statusPlacementFollowsMode() {
   show(openNote());
   QVERIFY(m_window && m_editor && m_pdf);

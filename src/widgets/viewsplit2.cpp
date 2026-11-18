@@ -4,9 +4,11 @@
 #include <QActionGroup>
 #include <QApplication>
 #include <QClipboard>
+#include <QCursor>
 #include <QDesktopServices>
 #include <QDir>
 #include <QHBoxLayout>
+#include <QInputDevice>
 #include <QMenu>
 #include <QMouseEvent>
 #include <QPointer>
@@ -15,6 +17,7 @@
 #include <QTabBar>
 #include <QToolButton>
 #include <QUrl>
+#include <QWheelEvent>
 
 #include "linkpreviewoverlay.h"
 #include "propertydefs.h"
@@ -81,7 +84,11 @@ ViewSplit2::ViewSplit2(ServiceLocator &p_services, const QString &p_workspaceId,
   }
 }
 
-ViewSplit2::~ViewSplit2() {}
+ViewSplit2::~ViewSplit2() {
+  if (qApp) {
+    qApp->removeEventFilter(this);
+  }
+}
 
 void ViewSplit2::refreshIcons() {
   initIcons();
@@ -94,7 +101,11 @@ void ViewSplit2::refreshIcons() {
   }
   if (m_stayOnTopButton) {
     // Keep the same action so its checked state survives a theme switch.
-    m_stayOnTopButton->defaultAction()->setIcon(m_stayOnTopIcon);
+    m_stayOnTopButton->defaultAction()->setIcon(m_active ? m_stayOnTopActiveIcon : m_stayOnTopIcon);
+  }
+  if (m_attachToMainWindowButton) {
+    m_attachToMainWindowButton->defaultAction()->setIcon(m_active ? m_attachToMainWindowActiveIcon
+                                                                  : m_attachToMainWindowIcon);
   }
   for (int i = 0; i < count(); ++i) {
     auto *win = getViewWindow(i);
@@ -114,6 +125,25 @@ void ViewSplit2::setupUI() {
 
   setupTabBar();
   setupCornerWidget();
+
+  m_cornerVisibilityTimer.setSingleShot(true);
+  m_cornerVisibilityTimer.setInterval(0);
+  connect(&m_cornerVisibilityTimer, &QTimer::timeout, this,
+          &ViewSplit2::updateCornerButtonsVisibility);
+  for (auto *button :
+       {m_windowListButton, m_menuButton, m_stayOnTopButton, m_attachToMainWindowButton}) {
+    if (!button) {
+      continue;
+    }
+    auto policy = button->sizePolicy();
+    policy.setRetainSizeWhenHidden(true);
+    button->setSizePolicy(policy);
+    button->hide();
+    if (auto *menu = button->menu()) {
+      connect(menu, &QMenu::aboutToHide, this, [this]() { m_cornerVisibilityTimer.start(); });
+    }
+  }
+  qApp->installEventFilter(this);
 
   connect(this, &QTabWidget::tabCloseRequested, this, &ViewSplit2::closeTab);
 
@@ -157,8 +187,55 @@ void ViewSplit2::setupTabBar() {
     }
   });
 
-  // Middle click to close tab.
+  // Wheel scrolling and middle/double click to close tabs.
   bar->installEventFilter(this);
+}
+
+void ViewSplit2::scrollTabBar(QWheelEvent *p_event) {
+  p_event->accept();
+  auto *bar = tabBar();
+  // Cocoa supplies estimated pixel deltas even for ordinary, notched mice.
+  const bool pixels =
+      p_event->device()->capabilities().testFlag(QInputDevice::Capability::PixelScroll) &&
+      !p_event->pixelDelta().isNull();
+  const QPoint delta = pixels ? p_event->pixelDelta() : p_event->angleDelta();
+  const bool horizontal = qAbs(delta.x()) > qAbs(delta.y());
+  int amount = horizontal ? delta.x() : delta.y();
+  if (horizontal && bar->isRightToLeft()) {
+    amount = -amount;
+  }
+  // The delivered delta already includes the system's natural-scrolling policy.
+  if (pixels != m_tabWheelUsesPixels || p_event->phase() == Qt::ScrollBegin ||
+      p_event->phase() == Qt::ScrollEnd ||
+      (amount != 0 && (amount > 0) != (m_tabWheelRemainder > 0))) {
+    m_tabWheelRemainder = 0;
+  }
+  m_tabWheelUsesPixels = pixels;
+  if (amount == 0) {
+    return;
+  }
+
+  // Qt 6 owns these direct children; clicking them scrolls without selecting a tab.
+  auto *button = bar->findChild<QToolButton *>(amount > 0 ? QLatin1String("ScrollLeftButton")
+                                                          : QLatin1String("ScrollRightButton"),
+                                               Qt::FindDirectChildrenOnly);
+  if (!button || !button->isVisible() || !button->isEnabled()) {
+    m_tabWheelRemainder = 0;
+    return;
+  }
+
+  // One arrow step per wheel notch or 40 logical pixels from a precise device.
+  const int step = pixels ? 40 : QWheelEvent::DefaultDeltasPerStep;
+  m_tabWheelRemainder += amount;
+  for (int remaining = bar->count(); remaining > 0 && qAbs(m_tabWheelRemainder) >= step;
+       --remaining) {
+    m_tabWheelRemainder += amount > 0 ? -step : step;
+    button->click();
+    if (!button->isVisible() || !button->isEnabled()) {
+      m_tabWheelRemainder = 0;
+      break;
+    }
+  }
 }
 
 void ViewSplit2::initIcons() {
@@ -179,11 +256,18 @@ void ViewSplit2::initIcons() {
   m_menuIcon = IconUtils::fetchIcon(themeService->getIconFile(menuIconName), fg);
   m_menuActiveIcon = IconUtils::fetchIcon(themeService->getIconFile(menuIconName), activeFg);
 
-  // Detached splits only (see setupCornerWidget()). Uses the same action-button
-  // foreground as the sibling corner buttons; the checked feedback comes from the
-  // theme's checkable tool button rules.
-  m_stayOnTopIcon =
-      IconUtils::fetchIcon(themeService->getIconFile(QStringLiteral("stay_on_top.svg")), fg);
+  // Match the sibling corner buttons' active state; checked feedback still comes
+  // from the theme's checkable tool button rules.
+  if (m_detached) {
+    const auto iconFile = themeService->getIconFile(QStringLiteral("stay_on_top.svg"));
+    m_stayOnTopIcon = IconUtils::fetchIcon(iconFile, fg);
+    m_stayOnTopActiveIcon = IconUtils::fetchIcon(iconFile, activeFg);
+
+    const auto attachIconFile =
+        themeService->getIconFile(QStringLiteral("attach_to_main_window.svg"));
+    m_attachToMainWindowIcon = IconUtils::fetchIcon(attachIconFile, fg);
+    m_attachToMainWindowActiveIcon = IconUtils::fetchIcon(attachIconFile, activeFg);
+  }
 
   // Read-only buffers display this pen-off badge on their tab (see effectiveTabIcon()).
   // Reuse the tab-area icon foreground (fg) so it matches sibling tab icons and
@@ -201,9 +285,8 @@ void ViewSplit2::setupCornerWidget() {
   auto layout = new QHBoxLayout(widget);
   layout->setContentsMargins(0, 0, 0, 0);
 
-  // A detached window holds a single tab and offers no split/workspace operations,
-  // so it drops the "Open Windows"/"Menu" buttons and shows a "Stay on Top" pin
-  // for its own top-level window instead.
+  // Detached windows replace the main split's window list/menu with their own
+  // pin and an action to attach every hosted view back to the main window.
   if (m_detached) {
     m_stayOnTopButton = new QToolButton(this);
     m_stayOnTopButton->setProperty(PropertyDefs::c_actionToolButton, true);
@@ -229,8 +312,19 @@ void ViewSplit2::setupCornerWidget() {
     // setDefaultAction() both registers the action on the button (so the
     // window-scoped shortcut resolves) and mirrors its checked/icon state.
     m_stayOnTopButton->setDefaultAction(act);
+    // Keep the window shortcut available while its button is hidden.
+    addAction(act);
 
     layout->addWidget(m_stayOnTopButton);
+
+    m_attachToMainWindowButton = new QToolButton(this);
+    m_attachToMainWindowButton->setProperty(PropertyDefs::c_actionToolButton, true);
+    auto attachAct = new QAction(m_attachToMainWindowIcon, tr("Attach to Main Window"),
+                                 m_attachToMainWindowButton);
+    connect(attachAct, &QAction::triggered, this, &ViewSplit2::attachToMainWindowRequested);
+    m_attachToMainWindowButton->setDefaultAction(attachAct);
+
+    layout->addWidget(m_attachToMainWindowButton);
 
     widget->installEventFilter(this);
 
@@ -277,6 +371,35 @@ void ViewSplit2::setupCornerWidget() {
   widget->installEventFilter(this);
 
   setCornerWidget(widget, Qt::TopRightCorner);
+}
+
+void ViewSplit2::updateCornerButtonsVisibility() {
+  QRect header;
+  if (tabBar()->isVisible()) {
+    header = tabBar()->geometry();
+  }
+  if (cornerWidget()->isVisible()) {
+    header = header.united(cornerWidget()->geometry());
+  }
+  const auto cursorPos = QCursor::pos();
+  bool visible = false;
+  if (header.contains(mapFromGlobal(cursorPos))) {
+    // Popup dismissal can leave underMouse() stale until the next Enter event.
+    // Hit-test the actual widget so a stationary header cursor keeps the buttons.
+    auto *hovered = QApplication::widgetAt(cursorPos);
+    visible = hovered && (hovered == this || isAncestorOf(hovered));
+  }
+  for (auto *button : {m_windowListButton, m_menuButton}) {
+    if (button && button->menu() && button->menu()->isVisible()) {
+      visible = true;
+    }
+  }
+  for (auto *button :
+       {m_windowListButton, m_menuButton, m_stayOnTopButton, m_attachToMainWindowButton}) {
+    if (button && button->isHidden() == visible) {
+      button->setVisible(visible);
+    }
+  }
 }
 
 void ViewSplit2::updateWindowList(QMenu *p_menu) {
@@ -540,6 +663,7 @@ void ViewSplit2::updateTabBarVisibility() {
     }
   }
   tabBar()->setVisible(!hideBar);
+  m_cornerVisibilityTimer.start();
 }
 
 void ViewSplit2::setCurrentViewWindow(ViewWindow2 *p_win) {
@@ -585,6 +709,13 @@ void ViewSplit2::setActive(bool p_active) {
   }
   if (m_menuButton) {
     m_menuButton->defaultAction()->setIcon(p_active ? m_menuActiveIcon : m_menuIcon);
+  }
+  if (m_stayOnTopButton) {
+    m_stayOnTopButton->defaultAction()->setIcon(p_active ? m_stayOnTopActiveIcon : m_stayOnTopIcon);
+  }
+  if (m_attachToMainWindowButton) {
+    m_attachToMainWindowButton->defaultAction()->setIcon(p_active ? m_attachToMainWindowActiveIcon
+                                                                  : m_attachToMainWindowIcon);
   }
 }
 
@@ -661,6 +792,22 @@ void ViewSplit2::mousePressEvent(QMouseEvent *p_event) {
 }
 
 bool ViewSplit2::eventFilter(QObject *p_object, QEvent *p_event) {
+  switch (p_event->type()) {
+  case QEvent::Enter:
+  case QEvent::Leave:
+  case QEvent::Show:
+  case QEvent::Hide:
+  case QEvent::WindowActivate:
+  case QEvent::WindowDeactivate:
+    // Child-to-child crossings and menu dismissal settle before sampling the
+    // cursor. Coalesce application events just like PresentationToolBarEffect.
+    if (!m_cornerVisibilityTimer.isActive()) {
+      m_cornerVisibilityTimer.start();
+    }
+    break;
+  default:
+    break;
+  }
   if (p_object == cornerWidget()) {
     if (p_event->type() == QEvent::Resize) {
       auto resizeEve = static_cast<QResizeEvent *>(p_event);
@@ -671,6 +818,11 @@ bool ViewSplit2::eventFilter(QObject *p_object, QEvent *p_event) {
       }
     }
   } else if (p_object == tabBar()) {
+    if (p_event->type() == QEvent::Wheel) {
+      scrollTabBar(static_cast<QWheelEvent *>(p_event));
+      // Also installed on qApp: stop here to avoid handling this wheel twice.
+      return true;
+    }
     if (p_event->type() == QEvent::MouseButtonRelease) {
       auto mouseEve = static_cast<QMouseEvent *>(p_event);
       if (mouseEve->button() == Qt::MiddleButton) {

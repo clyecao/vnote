@@ -1,32 +1,29 @@
 #include "updateservice.h"
 
+#include <QElapsedTimer>
 #include <QEventLoop>
-#include <QJsonDocument>
-#include <QJsonObject>
 #include <QMutexLocker>
 #include <QNetworkAccessManager>
 #include <QNetworkReply>
 #include <QNetworkRequest>
+#include <QRegularExpression>
+#include <QScopedPointer>
+#include <QTextDocument>
 #include <QTimer>
 #include <QVersionNumber>
+#include <QXmlStreamReader>
 #include <QtConcurrent>
 
 #include <functional>
+#include <utility>
 
 using namespace vnotex;
 
 constexpr int UpdateService::c_maxRedirects;
-constexpr qint64 UpdateService::c_maxApiResponseBytes;
 
 namespace {
 
-const QString c_githubApiLatestUrl =
-    QStringLiteral("https://api.github.com/repos/vnotex/vnote/releases/latest");
-
 const QString c_githubReleasesPageUrl = QStringLiteral("https://github.com/vnotex/vnote/releases");
-
-const QString c_giteeApiLatestUrl =
-    QStringLiteral("https://gitee.com/api/v5/repos/vnotex/vnote/releases/latest");
 
 const QString c_giteeReleasesPageUrl = QStringLiteral("https://gitee.com/vnotex/vnote/releases");
 
@@ -34,18 +31,123 @@ const QString c_giteeReleasesPageUrl = QStringLiteral("https://gitee.com/vnotex/
 // covers stalls, not a slow-but-alive server.
 constexpr int c_requestTimeoutMs = 60 * 1000;
 
+// Notes are optional: bound both the extra wait and in-memory metadata.
+constexpr int c_notesTimeoutMs = 10 * 1000;
+constexpr qint64 c_maxNotesBytes = 2 * 1024 * 1024;
+
 // How often a blocking request re-checks the cancellation flag. Bounds how long
 // service teardown can wait on an in-flight request.
 constexpr int c_cancelPollMs = 250;
 
+// HTML is metadata, never a request to load images, stylesheets or local files.
+class ReleaseNotesDocument : public QTextDocument {
+protected:
+  QVariant loadResource(int, const QUrl &) override { return QByteArray(); }
+};
+
+QString githubReleaseNotes(const QByteArray &p_feed, const QString &p_releaseUrl) {
+  QXmlStreamReader xml(p_feed);
+  const auto atom = QLatin1String("http://www.w3.org/2005/Atom");
+  if (!xml.readNextStartElement() || xml.name() != QLatin1String("feed") ||
+      xml.namespaceUri() != atom) {
+    return {};
+  }
+
+  QString content;
+  QString type;
+  int matches = 0;
+  while (xml.readNextStartElement()) {
+    if (xml.name() != QLatin1String("entry") || xml.namespaceUri() != atom) {
+      xml.skipCurrentElement();
+      continue;
+    }
+    bool matchesRelease = false;
+    QString entryContent;
+    QString entryType;
+    while (xml.readNextStartElement()) {
+      if (xml.namespaceUri() == atom && xml.name() == QLatin1String("link")) {
+        const auto attributes = xml.attributes();
+        if (attributes.value(QLatin1String("rel")) == QLatin1String("alternate") &&
+            attributes.value(QLatin1String("href")) == p_releaseUrl) {
+          matchesRelease = true;
+        }
+        xml.skipCurrentElement();
+      } else if (xml.namespaceUri() == atom && xml.name() == QLatin1String("content") &&
+                 !xml.attributes().hasAttribute(QLatin1String("src"))) {
+        entryType = xml.attributes().value(QLatin1String("type")).toString();
+        entryContent = xml.readElementText();
+      } else {
+        xml.skipCurrentElement();
+      }
+    }
+    if (matchesRelease) {
+      ++matches;
+      content = std::move(entryContent);
+      type = std::move(entryType);
+    }
+  }
+  // Reject truncated/ambiguous feeds rather than showing another version's notes.
+  while (!xml.atEnd()) {
+    xml.readNext();
+  }
+  if (xml.hasError() || matches != 1 || content.trimmed().isEmpty()) {
+    return {};
+  }
+  ReleaseNotesDocument document;
+  if (type == QLatin1String("html")) {
+    document.setHtml(content);
+  } else if (type.isEmpty() || type == QLatin1String("text")) {
+    document.setPlainText(content);
+  } else {
+    return {};
+  }
+  return document.toMarkdown();
+}
+
+QString giteeReleaseNotes(const QByteArray &p_page, const QString &p_version) {
+  const QString page = QString::fromUtf8(p_page);
+  // The sidebar repeats data-tag too. Only inspect the release's content container,
+  // and stop at the next release so a missing textarea cannot borrow older notes.
+  static const QRegularExpression release(
+      QStringLiteral(
+          R"(<div\b[^>]*\bclass\s*=\s*(['"])(?:[^'"]*\s)?release-tag-item(?:\s[^'"]*)?\1[^>]*>)"),
+      QRegularExpression::CaseInsensitiveOption);
+  static const QRegularExpression tag(QStringLiteral(R"(\bdata-tag\s*=\s*(['"])([^'"]*)\1)"));
+  static const QRegularExpression textarea(
+      QStringLiteral(
+          R"(<textarea\b[^>]*\bclass\s*=\s*(['"])(?:[^'"]*\s)?content(?:\s[^'"]*)?\1[^>]*>([\s\S]*?)</textarea\s*>)"),
+      QRegularExpression::CaseInsensitiveOption);
+  const QString targetTag = QLatin1Char('v') + p_version;
+  auto releases = release.globalMatch(page);
+  while (releases.hasNext()) {
+    const auto item = releases.next();
+    const auto itemTag = tag.matchView(item.capturedView());
+    if (itemTag.capturedView(2) != targetTag) {
+      continue;
+    }
+    const qsizetype end = releases.hasNext() ? releases.peekNext().capturedStart() : page.size();
+    const auto notes =
+        textarea.matchView(QStringView(page).sliced(item.capturedEnd(), end - item.capturedEnd()));
+    if (!notes.hasMatch()) {
+      return {};
+    }
+    // Textarea contents are raw text with character references, not HTML. Escape
+    // raw angle brackets before decoding once; &lt;b&gt; must also stay literal.
+    QString escaped = notes.captured(2);
+    escaped.replace(QLatin1Char('<'), QLatin1String("&lt;"));
+    escaped.replace(QLatin1Char('>'), QLatin1String("&gt;"));
+    ReleaseNotesDocument document;
+    document.setHtml(QStringLiteral("<pre>%1</pre>").arg(escaped));
+    const QString markdown = document.toPlainText();
+    return markdown.trimmed().isEmpty() ? QString() : markdown;
+  }
+  return {};
+}
+
 } // namespace
 
 const QStringList &UpdateService::allowedHosts(Source p_source) {
-  // The API host is the only one strictly needed, but the release pages and
-  // asset hosts are kept so a redirect within the same forge is still followed.
-  static const QStringList githubHosts{QStringLiteral("api.github.com"),
-                                       QStringLiteral("github.com"),
-                                       QStringLiteral("codeload.github.com")};
+  static const QStringList githubHosts{QStringLiteral("github.com")};
   static const QStringList giteeHosts{QStringLiteral("gitee.com")};
 
   return p_source == Source::Gitee ? giteeHosts : githubHosts;
@@ -92,8 +194,8 @@ UpdateService::~UpdateService() {
   waitForWorkers();
 }
 
-void UpdateService::testSetEndpointOverride(const QUrl &p_apiLatestUrl) {
-  m_apiLatestOverride = p_apiLatestUrl;
+void UpdateService::testSetEndpointOverride(const QUrl &p_latestReleaseUrl) {
+  m_latestReleaseOverride = p_latestReleaseUrl;
 }
 
 void UpdateService::testSetExtraAllowedHost(const QString &p_host) { m_extraAllowedHost = p_host; }
@@ -103,48 +205,27 @@ void UpdateService::testSetExtraAllowedHost(const QString &p_host) { m_extraAllo
 // ===========================================================================
 
 bool UpdateService::isHostAllowed(const QUrl &p_url) const {
-  if (p_url.scheme().compare(QLatin1String("https"), Qt::CaseInsensitive) != 0) {
-    // No plain HTTP anywhere, and therefore no HTTPS->HTTP downgrade.
-    if (!m_extraAllowedHost.isEmpty() &&
-        p_url.scheme().compare(QLatin1String("http"), Qt::CaseInsensitive) == 0 &&
-        p_url.host().compare(m_extraAllowedHost, Qt::CaseInsensitive) == 0) {
-      // Local test harness only, and only for the explicitly nominated host.
-      return true;
-    }
+  if (!p_url.isValid() || p_url.hasQuery() || p_url.hasFragment() ||
+      p_url.authority(QUrl::FullyEncoded).contains(QLatin1Char('@'))) {
     return false;
   }
-
-  const QString host = p_url.host().toLower();
-  if (allowedHosts(m_source).contains(host)) {
-    return true;
+  if (!m_latestReleaseOverride.isEmpty()) {
+    // A fixture may contact only its explicitly nominated origin, not production.
+    return !m_extraAllowedHost.isEmpty() &&
+           p_url.host().compare(m_extraAllowedHost, Qt::CaseInsensitive) == 0 &&
+           p_url.scheme() == m_latestReleaseOverride.scheme() &&
+           p_url.port() == m_latestReleaseOverride.port();
   }
-  if (m_source == Source::GitHub && host.endsWith(QLatin1String(".githubusercontent.com"))) {
-    // The API can redirect here; the exact subdomain has changed over time
-    // (objects. -> release-assets.), so the suffix is what is pinned.
-    return true;
-  }
-  if (m_source == Source::Gitee && host.endsWith(QLatin1String(".gitee.com"))) {
-    return true;
-  }
-  if (!m_extraAllowedHost.isEmpty() && host.compare(m_extraAllowedHost, Qt::CaseInsensitive) == 0) {
-    return true;
-  }
-  return false;
+  return p_url.scheme() == QLatin1String("https") && p_url.port(443) == 443 &&
+         allowedHosts(m_source).contains(p_url.host(), Qt::CaseInsensitive);
 }
 
 namespace {
 
-QNetworkRequest buildRequest(const QUrl &p_url, const QString &p_version,
-                             UpdateService::Source p_source) {
+QNetworkRequest buildRequest(const QUrl &p_url, const QString &p_version) {
   QNetworkRequest request(p_url);
   request.setHeader(QNetworkRequest::UserAgentHeader,
                     QStringLiteral("VNote/%1 (update check)").arg(p_version));
-  if (p_source == UpdateService::Source::Gitee) {
-    // Gitee's API rejects unknown vendor media types.
-    request.setRawHeader("Accept", "application/json, */*");
-  } else {
-    request.setRawHeader("Accept", "application/vnd.github+json, */*");
-  }
   // Redirects are followed MANUALLY so every hop can be checked against the
   // allowlist and against an HTTPS->HTTP downgrade. Override Qt 6's default
   // redirect following explicitly on EVERY request.
@@ -193,9 +274,11 @@ void waitForReply(QNetworkReply *p_reply, int p_timeoutMs,
 
 } // namespace
 
-bool UpdateService::fetchToMemory(QNetworkAccessManager &p_nam, const QUrl &p_url,
-                                  QByteArray *p_out, QString *p_error, qint64 p_maxBytes) {
-  QUrl url = p_url;
+bool UpdateService::findLatestRelease(QNetworkAccessManager &p_nam, UpdateInfo *p_info,
+                                      QString *p_error) {
+  QUrl url = latestReleaseUrl();
+  const QString latestPath = QStringLiteral("/vnotex/vnote/releases/latest");
+  const QString tagPrefix = QStringLiteral("/vnotex/vnote/releases/tag/v");
 
   for (int hop = 0; hop <= c_maxRedirects; ++hop) {
     if (isCancelled()) {
@@ -206,33 +289,18 @@ bool UpdateService::fetchToMemory(QNetworkAccessManager &p_nam, const QUrl &p_ur
       *p_error = tr("Refusing to contact an unexpected host: %1").arg(url.host());
       return false;
     }
+    const QString path = url.path(QUrl::FullyEncoded);
+    if (path != latestPath && path != QStringLiteral("/vnotex/vnote/releases/latest/")) {
+      *p_error = tr("The latest release could not be identified.");
+      return false;
+    }
 
-    QNetworkReply *reply = p_nam.get(buildRequest(url, m_currentVersion, m_source));
-
-    // The cap is enforced WHILE the body arrives: a hostile or broken server
-    // must not be able to make VNote buffer an unbounded response and only be
-    // rejected afterwards.
-    QByteArray body;
-    bool tooLarge = false;
-    QObject::connect(reply, &QNetworkReply::readyRead, reply, [&]() {
-      body.append(reply->readAll());
-      if (body.size() > p_maxBytes) {
-        tooLarge = true;
-        reply->abort();
-      }
-    });
-
+    QNetworkReply *reply = p_nam.head(buildRequest(url, m_currentVersion));
     bool timedOut = false;
     bool cancelled = false;
     waitForReply(
         reply, c_requestTimeoutMs, [this]() { return isCancelled(); }, &timedOut, &cancelled);
-
-    if (tooLarge) {
-      reply->deleteLater();
-      *p_error = tr("The response from %1 is unexpectedly large.").arg(url.host());
-      return false;
-    }
-    if (cancelled) {
+    if (cancelled || isCancelled()) {
       reply->deleteLater();
       *p_error = tr("Cancelled.");
       return false;
@@ -242,84 +310,119 @@ bool UpdateService::fetchToMemory(QNetworkAccessManager &p_nam, const QUrl &p_ur
       *p_error = tr("The request to %1 timed out.").arg(url.host());
       return false;
     }
-
-    const QVariant redirect = reply->attribute(QNetworkRequest::RedirectionTargetAttribute);
-    if (redirect.isValid()) {
-      const QUrl next = url.resolved(redirect.toUrl());
-      reply->deleteLater();
-      if (hop == c_maxRedirects) {
-        *p_error = tr("Too many redirects.");
-        return false;
-      }
-      url = next;
-      continue;
-    }
-
     if (reply->error() != QNetworkReply::NoError) {
       *p_error = reply->errorString();
       reply->deleteLater();
       return false;
     }
 
-    body.append(reply->readAll());
+    const int status = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
+    const QUrl location = reply->attribute(QNetworkRequest::RedirectionTargetAttribute).toUrl();
     reply->deleteLater();
-
-    if (body.size() > p_maxBytes) {
-      *p_error = tr("The response from %1 is unexpectedly large.").arg(url.host());
+    if ((status != 301 && status != 302 && status != 303 && status != 307 && status != 308) ||
+        !location.isValid() || location.isEmpty()) {
+      *p_error = tr("The latest release could not be identified.");
       return false;
     }
-
-    *p_out = body;
-    return true;
+    if (hop == c_maxRedirects) {
+      *p_error = tr("Too many redirects.");
+      return false;
+    }
+    const QUrl next = url.resolved(location);
+    if (!isHostAllowed(next)) {
+      *p_error = tr("Refusing to contact an unexpected host: %1").arg(next.host());
+      return false;
+    }
+    const QString nextPath = next.path(QUrl::FullyEncoded);
+    if (nextPath.startsWith(tagPrefix)) {
+      const QString version = nextPath.mid(tagPrefix.size());
+      qsizetype suffix = 0;
+      const QVersionNumber latest = QVersionNumber::fromString(version, &suffix);
+      if (latest.segmentCount() != 3 || suffix != version.size()) {
+        *p_error = tr("The latest release could not be identified.");
+        return false;
+      }
+      p_info->latestVersion = version;
+      p_info->updateAvailable = latest > QVersionNumber::fromString(m_currentVersion);
+      QUrl page = releasesPageUrl();
+      if (m_source == Source::Gitee) {
+        // Gitee's tag URL redirects to a source archive, not release notes.
+        page.setFragment(QStringLiteral("release-v%1").arg(version));
+      } else {
+        page.setPath(nextPath);
+      }
+      p_info->releaseUrl = page.toString();
+      // Discovery stops here; notes use a separate metadata endpoint, never this tag URL.
+      return true;
+    }
+    url = next;
   }
-
   *p_error = tr("Too many redirects.");
   return false;
 }
 
-QUrl UpdateService::apiLatestUrl() const {
-  if (!m_apiLatestOverride.isEmpty()) {
-    return m_apiLatestOverride;
+QString UpdateService::fetchReleaseNotes(QNetworkAccessManager &p_nam, const UpdateInfo &p_info) {
+  const QString path = m_source == Source::GitHub ? QStringLiteral("/vnotex/vnote/releases.atom")
+                                                  : QStringLiteral("/vnotex/vnote/releases");
+  QUrl url = latestReleaseUrl();
+  url.setPath(path);
+  QElapsedTimer deadline;
+  deadline.start();
+
+  for (int hop = 0; hop <= c_maxRedirects; ++hop) {
+    const int remaining = c_notesTimeoutMs - static_cast<int>(deadline.elapsed());
+    if (remaining <= 0 || isCancelled() || !isHostAllowed(url) ||
+        (url.path(QUrl::FullyEncoded) != path &&
+         url.path(QUrl::FullyEncoded) != path + QLatin1Char('/'))) {
+      return {};
+    }
+
+    QScopedPointer<QNetworkReply> reply(p_nam.get(buildRequest(url, m_currentVersion)));
+    reply->setReadBufferSize(64 * 1024);
+    QByteArray body;
+    bool tooLarge = false;
+    const auto readBody = [&]() {
+      // Read at most one byte past the cap, even with no/incorrect Content-Length.
+      body.append(reply->read(c_maxNotesBytes + 1 - body.size()));
+      if (body.size() > c_maxNotesBytes) {
+        tooLarge = true;
+        reply->abort();
+      }
+    };
+    connect(reply.data(), &QNetworkReply::readyRead, reply.data(), readBody);
+    bool timedOut = false;
+    bool cancelled = false;
+    waitForReply(
+        reply.data(), remaining, [this]() { return isCancelled(); }, &timedOut, &cancelled);
+    if (tooLarge || timedOut || cancelled || isCancelled() ||
+        reply->error() != QNetworkReply::NoError) {
+      return {};
+    }
+    readBody();
+    if (tooLarge) {
+      return {};
+    }
+
+    const int status = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
+    if (status == 200) {
+      return m_source == Source::GitHub ? githubReleaseNotes(body, p_info.releaseUrl)
+                                        : giteeReleaseNotes(body, p_info.latestVersion);
+    }
+    const QUrl location = reply->attribute(QNetworkRequest::RedirectionTargetAttribute).toUrl();
+    if ((status != 301 && status != 302 && status != 303 && status != 307 && status != 308) ||
+        !location.isValid() || location.isEmpty()) {
+      return {};
+    }
+    url = url.resolved(location);
   }
-  return QUrl(m_source == Source::Gitee ? c_giteeApiLatestUrl : c_githubApiLatestUrl);
+  return {};
 }
 
-QString UpdateService::releasePageUrl(const QString &p_tag, const QString &p_htmlUrlFromApi) const {
-  if (m_source == Source::GitHub) {
-    // The API's own page URL, but only when it is actually usable: it is handed
-    // straight to QDesktopServices, and UpdateDialog has no "empty URL" branch,
-    // so an absent or off-forge value would render a dead button (or open
-    // something the user did not ask for). isHostAllowed() applies the same
-    // https-only, source-scoped rule a redirect hop gets.
-    const QUrl fromApi(p_htmlUrlFromApi);
-    if (fromApi.isValid() && !fromApi.host().isEmpty() && isHostAllowed(fromApi)) {
-      return fromApi.toString();
-    }
-    if (!p_htmlUrlFromApi.isEmpty()) {
-      qWarning() << "update: ignoring an unusable release page URL from the API:"
-                 << p_htmlUrlFromApi;
-    }
-    if (!p_tag.isEmpty()) {
-      const QUrl synthesized(QStringLiteral("%1/tag/v%2").arg(c_githubReleasesPageUrl, p_tag));
-      if (synthesized.isValid()) {
-        return synthesized.toString();
-      }
-    }
-    return c_githubReleasesPageUrl;
+QUrl UpdateService::latestReleaseUrl() const {
+  if (!m_latestReleaseOverride.isEmpty()) {
+    return m_latestReleaseOverride;
   }
-
-  // Gitee's release JSON carries no html_url, so the page URL is synthesized.
-  // The pattern is <repo>/releases/tag/v<version>, VERIFIED against
-  // https://gitee.com/vnotex/vnote/releases/tag/v4.3.0 -- note the `tag/`
-  // segment, which the asset download path (/releases/download/v<ver>/...)
-  // does NOT have.
-  if (!p_tag.isEmpty()) {
-    const QUrl synthesized(QStringLiteral("%1/tag/v%2").arg(c_giteeReleasesPageUrl, p_tag));
-    if (synthesized.isValid()) {
-      return synthesized.toString();
-    }
-  }
-  return c_giteeReleasesPageUrl;
+  return QUrl(releasesPageUrl().toString() + QStringLiteral("/latest"));
 }
 
 // ===========================================================================
@@ -335,7 +438,7 @@ bool UpdateService::checkForUpdates() {
   }
   m_cancelled.store(false);
 
-  // fetchToMemory blocks on a nested event loop, so the check runs on a worker.
+  // HEAD discovery blocks on a nested event loop, so the check runs on a worker.
   // Signals are emitted back on the GUI thread via a queued invocation.
   trackWorker(QtConcurrent::run([this]() {
     // QNetworkAccessManager belongs to the thread that creates it, so the
@@ -358,30 +461,18 @@ bool UpdateService::checkForUpdates() {
     };
 
     QString error;
-    QByteArray body;
-    if (!fetchToMemory(nam, apiLatestUrl(), &body, &error)) {
+    if (!findLatestRelease(nam, &info, &error)) {
       fail(error);
       return;
     }
 
-    const QJsonObject release = QJsonDocument::fromJson(body).object();
-    QString tag = release.value(QStringLiteral("tag_name")).toString();
-    if (tag.startsWith(QLatin1Char('v'))) {
-      tag.remove(0, 1);
+    if (info.updateAvailable) {
+      info.releaseNotes = fetchReleaseNotes(nam, info);
     }
-    if (tag.isEmpty()) {
-      fail(tr("The latest release could not be identified."));
+    if (isCancelled()) {
+      fail(tr("Cancelled."));
       return;
     }
-
-    info.latestVersion = tag;
-    info.releaseNotes = release.value(QStringLiteral("body")).toString();
-    info.releaseUrl = releasePageUrl(tag, release.value(QStringLiteral("html_url")).toString());
-
-    const QVersionNumber latest = QVersionNumber::fromString(tag);
-    const QVersionNumber current = QVersionNumber::fromString(m_currentVersion);
-    info.updateAvailable = !latest.isNull() && latest > current;
-
     finish(info);
   }));
 

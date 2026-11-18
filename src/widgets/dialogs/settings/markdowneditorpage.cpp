@@ -43,6 +43,30 @@ MarkdownEditorPage::MarkdownEditorPage(ServiceLocator &p_services, QWidget *p_pa
 void MarkdownEditorPage::setupUI() {
   auto *mainLayout = new QVBoxLayout(this);
 
+  auto *menuLayout = SettingsPageHelper::addSection(
+      mainLayout, tr("Editor Toolbar Options"), tr("Options in the toolbar of the editor"), this);
+  const auto addMenuHint = [this, menuLayout](const QString &p_label,
+                                              const QString &p_description) {
+    auto *row = SettingsPageHelper::createSettingRow(p_label, p_description, nullptr, this);
+    menuLayout->addWidget(row);
+    addSearchItem(p_label, p_description,
+                  row->findChild<QLabel *>(QString(), Qt::FindDirectChildrenOnly));
+  };
+  addMenuHint(QObject::tr("Live Preview"),
+              tr("Show a rendered preview beside the Markdown source while editing"));
+  menuLayout->addWidget(SettingsPageHelper::createSeparator(this));
+  addMenuHint(QObject::tr("In-Place Preview"),
+              tr("Show previews of images, code blocks, math and tables inside the source editor "
+                 "(choose which sources to preview in the Edit section below)"));
+  menuLayout->addWidget(SettingsPageHelper::createSeparator(this));
+  addMenuHint(
+      QObject::tr("Markers Concealment"),
+      tr("None: show all Markdown source. Passive: show syntax and shorten long link, image and "
+         "reference URLs. Moderate: hide supported Markdown markers and link syntax, reveal them "
+         "on cursor entry, and shorten long image and reference URLs. Aggressive: hide supported "
+         "Markdown markers and link syntax, and shorten long image and reference URLs; link syntax "
+         "reappears when the cursor enters it"));
+
   setupGeneralGroup();
   setupReadGroup();
   setupEditGroup();

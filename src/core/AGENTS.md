@@ -122,7 +122,7 @@ QString templatePath = configMgr->getFileFromConfigFolder("web/markdown-viewer-t
    Regression gates: `testAbsentKeyKeepsTheCppDefaultForEveryField`, `testAnExplicitlyEmptiedUserOwnedMapIsNotResurrected`, `testAnUnreadableConfigIsNeverOverwritten` in `tests/core/test_configmgr2.cpp`.
 2. **Debounced persistence** — Changes to config objects auto-save via 500ms debounced timers.
 3. **Path resolution** — `getFileFromConfigFolder()` resolves relative paths against the app data directory.
-4. **Version upgrade** — `upgradeMainConfigOnVersionChange()` runs the config migration (`doVersionSpecificOverride` then stamping `c_version`) when the persisted version differs.
+4. **Version upgrade** — `upgradeMainConfigOnVersionChange()` runs main and readable-session migrations (`doVersionSpecificOverride` then stamping `c_version`) when the persisted main-config version differs.
 5. **Bundled extra data** — `ensureExtraData(bool p_force)` installs `themes/`, `tasks/`, `syntax-highlighting/`, `web/`, `dicts/`, `templates/` and `docs/` from `vnote_extra.rcc`. It runs on every **primary-instance** launch, after `SingleInstanceGuard::tryRun()` succeeds (or the explicit testing bypass below), not just on a version change; a rejected secondary must never mutate resources used by the running primary. Installation is gated per folder by a stamp file (`FileUtils2::c_versionStampFileName`, `.vnote-extra-version`) that `FileUtils2::installVersionedDir` writes **only after that folder copied completely**. A partial copy therefore leaves the folder unstamped and is retried on the next launch instead of being remembered as done. Deliberately decoupled from the config version stamp above: coupling them would re-run `doVersionSpecificOverride` on every launch and pin the config version to the old value forever whenever a copy is permanently broken. Per-folder failures are aggregated in `extraDataCopyFailures()` and PULLED once by `NotificationRouter` at `MainWindowAfterStart` (ConfigMgr2 has no `ServiceLocator`, and the copy runs in `main()` long before the router exists). `web/css/user.css` is on a preserve list because Settings treats an existing regular file there as user-owned; an incompatible node is a copy failure and prevents the completion stamp. `templates/` has NO preserve list: the bundled `templates/title.md` (`# %no%` plus a trailing `@@` cursor mark, so a new note opens with a level-1 heading matching its base name and the caret on the blank line below) is overwritten on every version bump, so a user who wants a variant must save it under a different name; user-created templates are untouched because only bundled paths are written.
 
 Bundled help lives in `docs/en_US/` and `docs/zh_CN/`. After translators load, `main()` initializes
@@ -144,14 +144,76 @@ After session restoration and queued file opens, `MainWindow2` opens the notes t
 and detached-file routing. The release-version skill requires replacing both documents from
 the target root changelog section in the same commit as the version bump.
 
+### Configuration migration contract
+
+Changing C++ defaults alone does not update a saved value: arrays and scalars replace the
+whole default, and user-owned objects can deliberately suppress bundled entries. For every
+configuration change, assess missing keys, old persisted values, custom overrides, and empty
+or disabled opt-outs. Record the migration decision in the change description.
+
+Use `MainConfig::doVersionSpecificOverride(previousVersion)` when an existing main-config
+value must change. Gate each migration at the first release carrying the fix, including users
+who already upgraded to releases with stale values; reuse default definitions where appropriate.
+`ConfigMgr2` invokes the hook only on a version-string change, before stamping and saving the
+new version. Verify the old-file load, migration, persisted result, and restart, plus custom
+values, opt-outs, and the version boundary. A downgrade that stamps an older version can cause
+a later re-upgrade to repeat a migration; do not claim a permanent migration marker exists.
+
+The United Entry migration uses the `4.14.1` boundary to include profiles stamped `4.14.0` on
+their next version change. It appends missing defaults by case-sensitive name, retains existing
+objects and order, and preserves an empty alias list. Individual deletions in older profiles
+cannot be distinguished from aliases that those releases never supplied. Same-version launches
+do not migrate; no application version bump is part of this fix.
+
+`SessionConfig::doVersionSpecificOverride(previousVersion)` seeds the shared Quick Note default
+when the loaded scheme list is empty and the previous version is below `4.14.2`. Missing legacy
+keys also load as empty; nonempty custom lists are unchanged. Legacy empty lists cannot be
+distinguished from deliberate deletions and are seeded once; empty opt-outs stamped `4.14.2` or
+newer remain empty. Persistence uses the normal session setter; notebooks live separately in
+`vxsession.json`. There is no version bump: profiles stamped `4.14.1` wait for their next version
+change. Same-version restarts preserve deletions, but forced `VX_DEBUG_REFRESH` builds can
+re-seed while the application stamp remains below the boundary, as can downgrade/re-upgrade.
+An unreadable session skips migration without delaying the main-config stamp: retry is possible
+only on a later version change still starting below the boundary, not after stamping `4.14.2`+.
+Coverage: the quick-note migration cases in `tests/core/test_configmgr2.cpp`.
+
+The Markdown experience migration resets
+`SessionConfig::m_hasConfirmedMarkdownEditorConcealment` for a parsed previous version below
+`4.14.4`, so existing users see the expanded three-choice prompt. Missing, empty or unparsable
+versions are excluded; unreadable sessions keep the existing migration/write protection.
+Only the session confirmation flag changes: the selected main-config concealment preset is
+preserved. The normal setter persists the reset; showing the prompt consumes it as before.
+The `4.14.4` release activates this migration for older profiles. Same-version `4.14.4`
+launches preserve the confirmation flag, including with `VX_DEBUG_REFRESH`, because the
+persisted version has reached the migration boundary. A downgrade followed by re-upgrade
+can repeat the reset. Coverage: `testMarkdownExperienceMigration` in
+`tests/core/test_configmgr2.cpp` verifies version gates, all presets, persistence and restart.
+
+### Update-check state
+
+`SessionConfig` owns `core.lastUpdateCheckTime` in local `session.json`, persisted as a decimal
+string of UTC epoch milliseconds. `CoreConfig` retains the `checkForUpdatesOnStart`,
+`updateSource`, and `skippedUpdateVersion` preferences in `vnotex.json`. `UpdateController`
+uses the session timestamp for its 24-hour startup throttle and records accepted check starts,
+including manual checks; manual checks bypass the throttle. Future timestamps are treated as stale.
+
+The timestamp is read only from `session.json`: there is no app-config import or fallback.
+A missing session value means never checked, even if `vnotex.json` still contains an old timestamp.
+No configuration migration is needed. An unreadable session suppresses all session writes for
+that manager's lifetime, including debounced and shutdown writes. Missing/empty sessions remain
+writable. The unrelated tooltip-progress migration is unchanged.
+Coverage: `test_sessionconfig_startup` and the update-timestamp cases in `test_configmgr2`.
+
 ### HTTP API configuration
 
-`HttpApiConfig` is a typed `MainConfig` child; access it through
-`ConfigMgr2::getConfig().getHttpApiConfig()`. Both the application and `core_configs`
-compile the same implementation. Absent settings retain disabled defaults, but malformed or
-explicitly null settings remain invalid through unrelated preference saves. Call `isValid()`
-before using listener fields, including when disabled. Token verifiers/grants are not part of
-the debounced main configuration. Runtime and private-storage ownership:
+`HttpApiConfig` is a typed `SessionConfig` child; access it through
+`ConfigMgr2::getSessionConfig().getHttpApiConfig()`. Both the application and `core_configs`
+compile the same implementation. Listener settings persist in the local `session.json`, not
+`vnotex.json`; there is no main-config import or fallback. Only the `httpApi` section receives
+absent-field defaults; the rest of the session document remains unmerged. Malformed or explicitly
+null settings remain invalid through unrelated session saves. Call `isValid()` before using
+listener fields, including when disabled. Token verifiers/grants remain separate from both
+configuration files. Runtime and private-storage ownership:
 [`../integrations/httpapi/AGENTS.md`](../integrations/httpapi/AGENTS.md).
 
 ### Interface translations
@@ -190,6 +252,21 @@ older primaries do not acknowledge requests from the new client.
 Regression coverage: `tests/core/test_singleinstanceguard.cpp`, using unique pipe names and
 lock paths plus real child senders (including delayed startup, fragmentation and overlapping
 connections). Never exercise tests against the production `vnote` pipe or lock.
+
+#### Explicit command-line open modes
+
+`--read-mode` and `--edit-mode` are mutually exclusive and compose with `--detached-view`.
+Without either, `ViewWindowMode::Invalid` means unspecified; never infer explicit Read from
+`FileOpenSettings`' default. Preserve this sentinel through both startup queues and IPC replay.
+Only explicit CLI modes set `m_forceMode` and `m_useInternalViewer` on the receiving primary.
+Read is a presentation mode, not file write protection; single-mode viewers retain their mode.
+
+`requestOpenFiles(files, detached, mode)` uses the existing opcodes 2/3 for unspecified mode.
+Opcode 4 carries compact JSON `{mode:"read"|"edit", detached:bool, files:[...]}`. Validate the
+complete options before acknowledgement; invalid options abort without dispatch. Restart an
+older primary after upgrading: it rejects opcode 4 rather than silently dropping the mode.
+Ordinary and explicit main-window opens request Show; detached opens do not. Parser coverage:
+`tests/core/test_commandlineoptions.cpp`; cross-process delivery uses the unique-pipe guard suite.
 
 #### Agent / manual testing bypass
 
@@ -506,7 +583,10 @@ The conversion pilot does NOT tokenize:
 - Font families, font sizes, padding, margin, line-height, border-radius.
 - Alert system (`.vx-alert*`, `.alert-*`).
 - Graph backgrounds (`div.vx-mermaid-graph` and similar).
-- Scrollbar `rgba(...)` values (the token regex does not accept `(` as a prefix character).
+- Native scrollbar `rgba(...)` values. Other bundled themes share the native
+  `widgets#qscrollbar#handle` normal/hover/pressed palette with their web thumbs.
+  Use complete color tokens, never tokens inside `rgba(...)`: the token regex
+  does not accept `(` as a prefix character.
 - CSS named colors (`purple`, `transparent`, `currentColor`).
 - CSS comments (`/* ... */`).
 - Source-text concepts with no rendered HTML analog: `LIST_BULLET`, `LIST_ENUMERATOR`, `IMAGE`, `REFERENCE`, `HTML_ENTITY`, `HTML`, `HTMLBLOCK`, `COMMENT`, `NOTE`, `FRONTMATTER`, `INLINEEQUATION`, `DISPLAYFORMULA`, `TABLEBORDER`.

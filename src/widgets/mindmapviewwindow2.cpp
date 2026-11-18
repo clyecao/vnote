@@ -7,6 +7,7 @@
 #include <QGraphicsView>
 #include <QKeySequence>
 #include <QMenu>
+#include <QMessageBox>
 #include <QPainter>
 #include <QPalette>
 #include <QPointer>
@@ -75,6 +76,105 @@ QWidget *MindMapViewWindow2::getToolsPanel() {
     panel->setParent(this);
   }
   return panel.data();
+}
+
+bool MindMapViewWindow2::isOutlineSourceEditBusy() const {
+  return m_editor && m_editor->isSourceEditBusy();
+}
+
+bool MindMapViewWindow2::isModified() const {
+  // Accepted edits already belong to the source. The memory buffer is only a cache,
+  // and its modified bit says nothing about the source's save state.
+  return isOutlineMindMapPreview() ? m_editor && m_editor->hasPendingEdit()
+                                   : ViewWindow2::isModified();
+}
+
+bool MindMapViewWindow2::aboutToClose(bool p_force) {
+  if (!isOutlineMindMapPreview()) {
+    return ViewWindow2::aboutToClose(p_force);
+  }
+  if (isOutlineSourceRetirementBlocked()) {
+    return false;
+  }
+  const QPointer<MindMapViewWindow2> guard(this);
+  const auto generation = m_generation;
+  const auto current = [&] { return guard && generation == guard->m_generation; };
+  // A close-consent dialog can settle the source in its nested event loop. Never
+  // accept an earlier Enter while the user is deciding whether to discard that draft.
+  if (m_editor)
+    m_editor->cancelPendingTopicAcceptance();
+  // Keep the widget/caret/local undo intact if capture is rejected or close is cancelled.
+  const bool committed =
+      !m_editor || !m_editor->hasPendingEdit() || m_editor->commitActiveEdit(true);
+  if (!current()) {
+    return false;
+  }
+  if (!committed) {
+    if (p_force) {
+      return false;
+    }
+    // Fullscreen restoration and the modal loop can both trigger draft captures.
+    // Hold acceptance until the decision, even if source publication finishes.
+    m_outlineSourceEditConsent = true;
+    m_editor->setSourceEditPending(true);
+    const auto releaseConsent = qScopeGuard([guard, generation] {
+      if (guard && guard->m_generation == generation) {
+        guard->m_outlineSourceEditConsent = false;
+        guard->m_editor->setSourceEditPending(guard->m_outlineSourceEditPending);
+      }
+    });
+    setViewFullScreen(false);
+    if (!current()) {
+      return false;
+    }
+    const int response = questionSaveOrDiscard(
+        tr("Close mind map (%1) with an unapplied topic edit?").arg(getName()),
+        tr("The topic edit could not be applied to the source. Discard only this draft? "
+           "Changes already applied to the source will be kept."));
+    if (!current() || response != QMessageBox::Discard || isOutlineSourceRetirementBlocked()) {
+      return false;
+    }
+    // commitActiveEdit(false) accepts a draft; only the explicit discard API abandons it.
+    if (!m_editor->discardActiveEdit() || !current()) {
+      return false;
+    }
+  }
+  // Reuse ordinary snapshot failure and writer unregistration, without a scratch prompt.
+  // This captures only the derived memory buffer and never clears the source's dirty state.
+  return ViewWindow2::aboutToClose(p_force);
+}
+
+void MindMapViewWindow2::setOutlineSourceEditHandler(m3::qt::SourceEditHandler p_handler,
+                                                     m3::qt::SourceEditApproval p_approve) {
+  if (isOutlineMindMapPreview() && !m_outlineSourceEditRetired && m_editor &&
+      !m_editor->hasSourceEditHandler()) {
+    m_editor->setSourceEditHandler(std::move(p_handler), std::move(p_approve));
+  }
+}
+
+bool MindMapViewWindow2::synchronizeOutlineSourceTopics(
+    const QVector<m3::qt::OutlineEntry> &p_entries) {
+  return isOutlineMindMapPreview() && !m_outlineSourceEditRetired && m_contentLoaded &&
+         m_propagateEditorToBuffer && m_editor && !m_editor->isSourceEditBusy() &&
+         m_editor->synchronizeSourceTopics(p_entries);
+}
+
+void MindMapViewWindow2::setOutlineSourceEditPending(bool p_pending) {
+  if (isOutlineMindMapPreview() && !m_outlineSourceEditRetired && m_editor) {
+    m_outlineSourceEditPending = p_pending;
+    m_editor->setSourceEditPending(p_pending || m_outlineSourceEditConsent);
+  }
+}
+
+void MindMapViewWindow2::retireOutlineSourceEditHandler() {
+  if (isOutlineMindMapPreview() && m_editor && !m_editor->isSourceEditBusy()) {
+    // Retirement must not turn a still-alive deferred-delete widget into a scratch editor.
+    // Accepted close has already committed or explicitly discarded its pending draft.
+    m_outlineSourceEditRetired = true;
+    m_editor->setReadOnly(true);
+    // Drop source callbacks and paired history before the source can release plaintext/keys.
+    m_editor->setSourceEditHandler({});
+  }
 }
 
 void MindMapViewWindow2::applyFileOpenSettings(const FileOpenSettings &p_settings) {
@@ -176,13 +276,23 @@ void MindMapViewWindow2::connectEditorSignals() {
       onEditorContentsChanged();
     }
   });
+  connect(m_editor, &m3::qt::MindMapEditor::pendingEditChanged, this, [this](bool) {
+    if (isOutlineMindMapPreview()) {
+      emit statusChanged();
+    }
+  });
   connect(m_editor, &MindMapEditor::statusMessageRequested, this, [this](const QString &p_message) {
     m_lastEditorError = p_message;
     showMessage(p_message);
   });
   connect(m_editor, &m3::qt::MindMapEditor::documentChanged, this, [this]() {
     if (m_propagateEditorToBuffer && m_contentLoaded) {
+      const QPointer<MindMapViewWindow2> guard(this);
       refreshOutline();
+      if (guard && isOutlineMindMapPreview()) {
+        // Native commit/replay has left its busy phase before documentChanged.
+        emit outlineSourceEditPublished();
+      }
     }
   });
   connect(m_editor, &m3::qt::MindMapEditor::selectionChanged, this,
@@ -274,6 +384,7 @@ void MindMapViewWindow2::syncInsertionActions() {
     m_insertLinkAction->setEnabled(available);
     m_insertImageAction->setEnabled(available);
   }
+  syncOutlineReorderSupported();
 }
 
 void MindMapViewWindow2::refreshInsertionShortcuts() {
@@ -487,6 +598,10 @@ void MindMapViewWindow2::releaseBufferResources() {
   m_propagateEditorToBuffer = false;
   m_contentLoaded = false;
   const QPointer<MindMapViewWindow2> guard(this);
+  retireOutlineSourceEditHandler();
+  if (!guard) {
+    return;
+  }
   // Revoke insertion dialogs, image overlays, image requests and link consent
   // while the base still owns the outgoing identity. No native widget is rebuilt.
   m_editor->setBuffer(Buffer2());
@@ -512,6 +627,14 @@ void MindMapViewWindow2::bindBufferResources() {
 }
 
 void MindMapViewWindow2::syncEditorFromBuffer() {
+  if (isOutlineMindMapPreview()) {
+    // Initial construction loads before provenance is attached. Thereafter this
+    // memory buffer is only a derived cache, never a document/reload authority.
+    // In particular, capture during modal move approval must not reload the model
+    // on focus restoration, cancel a draft, or replace its paired source history.
+    m_lastKnownRevision = getBuffer().isValid() ? getBuffer().getRevision() : 0;
+    return;
+  }
   const QPointer<MindMapViewWindow2> guard(this);
   const auto generation = ++m_generation;
   const bool propagate = m_propagateEditorToBuffer;
@@ -666,24 +789,41 @@ void MindMapViewWindow2::setModified(bool p_modified) { m_editor->setModified(p_
 void MindMapViewWindow2::setMode(ViewWindowMode p_mode) {
   Q_UNUSED(p_mode);
   m_mode = ViewWindowMode::Edit;
+  syncOutlineReorderSupported();
 }
 
 void MindMapViewWindow2::handleNodeRetargeted(const NodeIdentifier &p_newNodeId) {
   ViewWindow2::handleNodeRetargeted(p_newNodeId);
   ++m_generation;
   // Rename/move updates resource policy only; drafts, history and camera stay native-owned.
+  const QPointer<MindMapViewWindow2> guard(this);
   m_editor->setBuffer(getBuffer());
+  if (guard) {
+    refreshOutline();
+  }
 }
 
 void MindMapViewWindow2::handleEditorConfigChange() {
+  if (m_outlineSourceEditRetired)
+    return;
   const QPointer<MindMapViewWindow2> guard(this);
   ViewWindow2::handleEditorConfigChange();
   if (guard && m_editor) {
-    m_editor->applyConfig(!isDetached());
+    m_editor->setBasicMode(isOutlineMindMapPreview());
+    if (guard) {
+      m_editor->applyConfig(!isDetached());
+    }
   }
   if (guard) {
     refreshInsertionShortcuts();
     syncInsertionActions();
+  }
+  // Preview provenance is attached after construction; replace the initial ordinary
+  // map headings before that snapshot is shown.
+  if (guard && isOutlineMindMapPreview()) {
+    refreshOutline();
+  }
+  if (guard) {
     applyEditorPalette();
   }
 }
@@ -765,7 +905,8 @@ QSharedPointer<OutlineProvider> MindMapViewWindow2::getOutlineProvider() const {
 void MindMapViewWindow2::setupOutlineProvider() {
   m_outlineProvider = QSharedPointer<OutlineProvider>::create();
   m_outlineProvider->setAutoSectionNumberAllowed(false);
-  m_outlineProvider->setReorderSupported(false);
+  connect(m_outlineProvider.data(), &OutlineProvider::moveRequested, this,
+          &MindMapViewWindow2::reorderOutline);
   connect(m_outlineProvider.data(), &OutlineProvider::headingClicked, this, [this](int p_index) {
     if (!m_contentLoaded || p_index < 0 || p_index >= m_outlineNodeIds.size()) {
       return;
@@ -776,7 +917,96 @@ void MindMapViewWindow2::setupOutlineProvider() {
   });
 }
 
+bool MindMapViewWindow2::canReorderOutline() const {
+  return m_contentLoaded && m_propagateEditorToBuffer && isEnabled() &&
+         m_mode == ViewWindowMode::Edit && !isOutlineMindMapPreview() && m_editor &&
+         getBuffer().isValid() && !getBuffer().isReadOnly() && m_editor->canReorderOutline();
+}
+
+void MindMapViewWindow2::syncOutlineReorderSupported() {
+  m_outlineProvider->setReorderSupported(m_outlineGeneration == m_generation &&
+                                         canReorderOutline());
+}
+
+void MindMapViewWindow2::reorderOutline(const OutlineMove &p_move) {
+  const auto outline = m_outlineProvider->getOutline();
+  if (!outline || !outline->m_reorderSupported || m_outlineGeneration != m_generation ||
+      !canReorderOutline()) {
+    return;
+  }
+  const int source = p_move.m_sourceHeadingIndex;
+  const int before = p_move.m_beforeHeadingIndex;
+  const int parent = p_move.m_parentHeadingIndex;
+  const auto &headings = outline->m_headings;
+  if (source <= 0 || source >= headings.size() || before < -1 || before >= headings.size() ||
+      parent < -1 || parent >= headings.size() || !headings.at(source).m_reorderable ||
+      headings.size() != m_outlineNodeIds.size()) {
+    return;
+  }
+  const qint64 targetLevel = parent < 0 ? 1 : qint64(headings.at(parent).m_level) + 1;
+  if (targetLevel != p_move.m_targetLevel || targetLevel > INT_MAX ||
+      (parent >= 0 && !headings.at(parent).m_acceptsChildren)) {
+    return;
+  }
+  int sourceEnd = source + 1;
+  while (sourceEnd < headings.size() &&
+         headings.at(sourceEnd).m_level > headings.at(source).m_level) {
+    ++sourceEnd;
+  }
+  if ((parent >= source && parent < sourceEnd) || (before >= source && before < sourceEnd) ||
+      before == 0) {
+    return;
+  }
+
+  const QPointer<MindMapViewWindow2> guard(this);
+  const auto generation = m_generation;
+  // Retain every ID from this publication before any native getter can reenter.
+  const QStringList nodeIds = m_outlineNodeIds;
+  const QString sourceId = nodeIds.at(source);
+  const QString parentId = parent < 0 ? QString() : nodeIds.at(parent);
+  const auto entries = m_editor->outline();
+  if (!guard || generation != m_generation || m_outlineGeneration != generation ||
+      m_outlineProvider->getOutline() != outline || !canReorderOutline() ||
+      entries.size() != headings.size()) {
+    return;
+  }
+  for (int i = 0; i < entries.size(); ++i) {
+    const auto &entry = entries.at(i);
+    if (entry.id != nodeIds.at(i) || entry.level != headings.at(i).m_level ||
+        entry.topic != headings.at(i).m_name) {
+      return;
+    }
+  }
+
+  const auto parentIndex = [&headings](int p_index) {
+    for (int i = p_index - 1; i >= 0; --i) {
+      if (headings.at(i).m_level < headings.at(p_index).m_level) {
+        return i;
+      }
+    }
+    return -1;
+  };
+  int childIndex = -1;
+  // The shared anchor may be the following parent's sibling, not one of its children.
+  // Such an anchor means append under the explicit parent, never detach to the forest.
+  if (before >= 0 && parentIndex(before) == parent) {
+    childIndex = 0;
+    for (int i = parent + 1; i < before; ++i) {
+      if (i != 0 && (i < source || i >= sourceEnd) && headings.at(i).m_level == targetLevel) {
+        ++childIndex;
+      }
+    }
+  }
+  // No flush or draft acceptance: the adapter rechecks its protected lease and
+  // performs exactly one native transaction. documentChanged owns history/refresh.
+  if (guard && generation == m_generation && m_outlineGeneration == generation &&
+      m_outlineProvider->getOutline() == outline && canReorderOutline()) {
+    m_editor->reorderOutlineNode(sourceId, parentId, childIndex);
+  }
+}
+
 void MindMapViewWindow2::clearOutline() {
+  m_outlineGeneration = 0;
   m_outlineNodeIds.clear();
   m_outlineIndexes.clear();
   const QPointer<MindMapViewWindow2> guard(this);
@@ -807,6 +1037,8 @@ void MindMapViewWindow2::refreshOutline() {
     return;
   }
   auto outline = QSharedPointer<Outline>::create();
+  outline->m_maxLevel = INT_MAX;
+  outline->m_reorderSupported = canReorderOutline();
   outline->m_headings.reserve(entries.size());
   QStringList nodeIds;
   nodeIds.reserve(entries.size());
@@ -815,12 +1047,16 @@ void MindMapViewWindow2::refreshOutline() {
   for (const auto &entry : entries) {
     indexes.insert(entry.id, nodeIds.size());
     nodeIds.append(entry.id);
-    outline->m_headings.append(Outline::Heading(entry.topic, entry.level));
+    Outline::Heading heading(entry.topic, entry.level);
+    heading.m_reorderable = !isOutlineMindMapPreview() && nodeIds.size() > 1;
+    heading.m_acceptsChildren = !isOutlineMindMapPreview();
+    outline->m_headings.append(std::move(heading));
   }
   m_outlineNodeIds = std::move(nodeIds);
   m_outlineIndexes = std::move(indexes);
+  m_outlineGeneration = generation;
   m_outlineProvider->setOutline(outline);
-  if (guard && generation == m_generation) {
+  if (guard && generation == m_generation && m_outlineProvider->getOutline() == outline) {
     updateCurrentHeading();
   }
 }

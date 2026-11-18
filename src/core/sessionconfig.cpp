@@ -4,6 +4,7 @@
 #include <QDir>
 #include <QJsonArray>
 #include <QJsonDocument>
+#include <QVersionNumber>
 
 #include <utils/pathutils.h>
 #include <utils/processutils.h>
@@ -12,6 +13,16 @@
 #include "mainconfig.h"
 
 using namespace vnotex;
+
+namespace {
+QVector<SessionConfig::QuickNoteScheme> defaultQuickNoteSchemes() {
+  return {{QStringLiteral("Quick Note in Current Notebook"),
+           QStringLiteral("Quick Notes"),
+           QStringLiteral("quick_note_%da%.md"),
+           {},
+           false}};
+}
+} // namespace
 
 bool SessionConfig::QuickNoteScheme::operator==(const QuickNoteScheme &p_other) const {
   return m_name == p_other.m_name && m_folderPath == p_other.m_folderPath &&
@@ -114,11 +125,8 @@ bool SessionConfig::ExternalProgram::isSystemProgram() const {
 }
 
 SessionConfig::SessionConfig(IConfigMgr *p_mgr)
-    : IConfig(p_mgr, nullptr), m_quickNoteSchemes{{QStringLiteral("Quick Note in Current Notebook"),
-                                                   QStringLiteral("Quick Notes"),
-                                                   QStringLiteral("quick_note_%da%.md"),
-                                                   {},
-                                                   false}} {}
+    : IConfig(p_mgr, nullptr), m_httpApiConfig(p_mgr, this),
+      m_quickNoteSchemes(defaultQuickNoteSchemes()) {}
 
 SessionConfig::~SessionConfig() {}
 
@@ -148,6 +156,24 @@ void SessionConfig::fromJson(const QJsonObject &p_jobj) {
   loadExternalPrograms(p_jobj);
 
   loadQuickNoteSchemes(p_jobj);
+
+  // Only HTTP settings receive defaults; other session fields depend on absence.
+  auto httpApi = HttpApiConfig(nullptr).toJson();
+  const auto section = p_jobj.value(m_httpApiConfig.getSectionName());
+  if (!section.isUndefined()) {
+    if (section.isObject()) {
+      const auto values = section.toObject();
+      for (auto it = httpApi.begin(); it != httpApi.end(); ++it) {
+        if (values.contains(it.key())) {
+          it.value() = values.value(it.key());
+        }
+      }
+    } else {
+      // The strict parser retains a malformed section as invalid null fields.
+      httpApi = QJsonObject();
+    }
+  }
+  m_httpApiConfig.fromJson(httpApi);
 }
 
 void SessionConfig::loadCore(const QJsonObject &p_session) {
@@ -193,6 +219,7 @@ void SessionConfig::loadCore(const QJsonObject &p_session) {
   m_currentNotebook = readString(coreObj, QStringLiteral("currentNotebook"));
   m_lastToolTipDate = readString(coreObj, QStringLiteral("lastToolTipDate"));
   m_nextToolTipIndex = qMax(0, readInt(coreObj, QStringLiteral("nextToolTipIndex")));
+  m_lastUpdateCheckTime = parseTimestamp(coreObj.value(QStringLiteral("lastUpdateCheckTime")));
 }
 
 QJsonObject SessionConfig::saveCore() const {
@@ -209,11 +236,14 @@ QJsonObject SessionConfig::saveCore() const {
   coreObj[QStringLiteral("currentNotebook")] = m_currentNotebook;
   coreObj[QStringLiteral("lastToolTipDate")] = m_lastToolTipDate;
   coreObj[QStringLiteral("nextToolTipIndex")] = m_nextToolTipIndex;
+  coreObj[QStringLiteral("lastUpdateCheckTime")] = QString::number(m_lastUpdateCheckTime);
   return coreObj;
 }
 
 void SessionConfig::loadEditor(const QJsonObject &p_session) {
   const auto editorObj = p_session.value(QStringLiteral("editor")).toObject();
+  m_hasConfirmedMarkdownEditorConcealment =
+      editorObj.value(QStringLiteral("hasConfirmedMarkdownEditorConcealment")).toBool(false);
   m_markdownZoomFactorInReadMode =
       editorObj.value(QStringLiteral("markdownZoomFactorInReadMode")).toDouble(1.0);
   m_textEditorZoomDelta = editorObj.value(QStringLiteral("textEditorZoomDelta")).toInt(0);
@@ -223,11 +253,21 @@ void SessionConfig::loadEditor(const QJsonObject &p_session) {
 
 QJsonObject SessionConfig::saveEditor() const {
   QJsonObject editorObj;
+  editorObj[QStringLiteral("hasConfirmedMarkdownEditorConcealment")] =
+      m_hasConfirmedMarkdownEditorConcealment;
   editorObj[QStringLiteral("markdownZoomFactorInReadMode")] = m_markdownZoomFactorInReadMode;
   editorObj[QStringLiteral("textEditorZoomDelta")] = m_textEditorZoomDelta;
   editorObj[QStringLiteral("mindMapZoomFactor")] = m_mindMapZoomFactor;
   editorObj[QStringLiteral("typstZoomFactor")] = m_typstZoomFactor;
   return editorObj;
+}
+
+bool SessionConfig::getHasConfirmedMarkdownEditorConcealment() const {
+  return m_hasConfirmedMarkdownEditorConcealment;
+}
+
+void SessionConfig::setHasConfirmedMarkdownEditorConcealment(bool p_confirmed) {
+  updateConfig(m_hasConfirmedMarkdownEditorConcealment, p_confirmed, this);
 }
 
 qreal SessionConfig::getMarkdownZoomFactorInReadMode() const {
@@ -290,6 +330,10 @@ void SessionConfig::setNextToolTipIndex(int p_index) {
   updateConfig(m_nextToolTipIndex, qMax(0, p_index), this);
 }
 
+HttpApiConfig &SessionConfig::getHttpApiConfig() { return m_httpApiConfig; }
+
+const HttpApiConfig &SessionConfig::getHttpApiConfig() const { return m_httpApiConfig; }
+
 void SessionConfig::update() { getMgr()->updateSessionConfig(toJson()); }
 
 QJsonObject SessionConfig::toJson() const {
@@ -309,6 +353,7 @@ QJsonObject SessionConfig::toJson() const {
   writeByteArray(obj, QStringLiteral("tagExplorerSession"), m_tagExplorerSession);
   obj[QStringLiteral("externalPrograms")] = saveExternalPrograms();
   obj[QStringLiteral("quickNoteSchemes")] = saveQuickNoteSchemes();
+  obj[m_httpApiConfig.getSectionName()] = m_httpApiConfig.toJson();
   return obj;
 }
 
@@ -417,9 +462,21 @@ void SessionConfig::setStartOnSystemStartup(bool p_enabled) {
   updateConfig(m_startOnSystemStartup, p_enabled, this);
 }
 
-void SessionConfig::doVersionSpecificOverride() {
-  // In a new version, we may want to change one value by force.
-  // SHOULD set the in memory variable only, or will override the notebook list.
+void SessionConfig::doVersionSpecificOverride(const QString &p_previousVersion) {
+  // Saved empty lists mask the constructor default through 4.14.1. Seed them once
+  // on a version change; keep custom schemes and later explicit empty opt-outs.
+  static const QVersionNumber c_quickNoteSchemesVersion(4, 14, 2);
+  if (m_quickNoteSchemes.isEmpty() &&
+      QVersionNumber::fromString(p_previousVersion) < c_quickNoteSchemesVersion) {
+    setQuickNoteSchemes(defaultQuickNoteSchemes());
+  }
+
+  // Offer the expanded Markdown experience choices to users of the earlier presets.
+  const auto previousVersion = QVersionNumber::fromString(p_previousVersion);
+  static const QVersionNumber c_markdownExperienceVersion(4, 14, 4);
+  if (!previousVersion.isNull() && previousVersion < c_markdownExperienceVersion) {
+    setHasConfirmedMarkdownEditorConcealment(false);
+  }
 }
 
 const ExportOption &SessionConfig::getExportOption() const { return m_exportOption; }
@@ -702,6 +759,27 @@ const QVector<SessionConfig::QuickNoteScheme> &SessionConfig::getQuickNoteScheme
 
 void SessionConfig::setQuickNoteSchemes(const QVector<QuickNoteScheme> &p_schemes) {
   updateConfig(m_quickNoteSchemes, p_schemes, this);
+}
+
+qint64 SessionConfig::getLastUpdateCheckTime() const { return m_lastUpdateCheckTime; }
+
+void SessionConfig::setLastUpdateCheckTime(qint64 p_msSinceEpoch) {
+  updateConfig(m_lastUpdateCheckTime, p_msSinceEpoch, this);
+}
+
+bool SessionConfig::isUpdateCheckDue(qint64 p_nowMsSinceEpoch, qint64 p_intervalMs) const {
+  if (m_lastUpdateCheckTime <= 0) {
+    // Never checked.
+    return true;
+  }
+
+  if (m_lastUpdateCheckTime > p_nowMsSinceEpoch) {
+    // Future-dated (clock moved backwards, or a corrupted value): treat as stale
+    // so the throttle can never wedge a user out of update checks forever.
+    return true;
+  }
+
+  return (p_nowMsSinceEpoch - m_lastUpdateCheckTime) >= p_intervalMs;
 }
 
 const QStringList &SessionConfig::getSearchHistory() const { return m_searchHistory; }

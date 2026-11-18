@@ -209,6 +209,7 @@ void ConfigMgr2::init() {
     bool readOk = true;
     auto sessionConfigJson =
         m_configService->getConfigByName(DataLocation::Local, kSessionFileBaseName, &readOk);
+    m_sessionConfigReadFailed = !readOk;
     bool migratedTipProgress = false;
     if (readOk && !legacyTipProgress.isEmpty()) {
       // Import only absent fields; an explicit session reset must beat stale main-config state.
@@ -448,6 +449,12 @@ void ConfigMgr2::doWriteSessionConfig() {
     return;
   }
 
+  if (m_sessionConfigReadFailed) {
+    qWarning() << "Refusing to write session config: it could not be read at startup";
+    m_pendingSessionConfig = QJsonObject();
+    return;
+  }
+
   qDebug() << "Writing session config";
   Error err = m_configService->updateConfigByName(DataLocation::Local, kSessionFileBaseName,
                                                   m_pendingSessionConfig);
@@ -470,6 +477,9 @@ void ConfigMgr2::upgradeMainConfigOnVersionChange() {
   // Apply version-gated forced overrides using the still-persisted previous
   // version, BEFORE stamping the new version below.
   m_mainConfig->doVersionSpecificOverride(m_mainConfig->getVersion());
+  if (!m_sessionConfigReadFailed) {
+    m_sessionConfig->doVersionSpecificOverride(m_mainConfig->getVersion());
+  }
 
   m_mainConfig->setVersion(c_version.toString());
   m_mainConfig->update();

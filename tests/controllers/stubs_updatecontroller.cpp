@@ -13,10 +13,16 @@
 
 using namespace vnotex;
 
-UpdateDialog::UpdateDialog(const UpdateInfo &p_info, QWidget *p_parent) : QDialog(p_parent) {
+UpdateDialog::UpdateDialog(ServiceLocator &p_services, const UpdateInfo &p_info, QWidget *p_parent)
+    : QDialog(p_parent) {
+  Q_UNUSED(p_services)
   Q_UNUSED(p_info)
 }
 
 void UpdateDialog::setFailed(const QString &p_message) { Q_UNUSED(p_message) }
 
-void UpdateDialog::setupUi() {}
+#ifdef Q_OS_WIN
+void UpdateDialog::setUpdateInProgress() {}
+#endif
+
+void UpdateDialog::setupUi(ServiceLocator &p_services) { Q_UNUSED(p_services) }

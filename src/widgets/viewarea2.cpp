@@ -7,6 +7,7 @@
 #include <QJsonArray>
 #include <QJsonObject>
 #include <QLabel>
+#include <QMessageBox>
 #include <QPointer>
 #include <QPushButton>
 #include <QScopeGuard>
@@ -37,8 +38,10 @@
 #include <gui/services/viewwindowfactory.h>
 #include <gui/utils/widgetutils.h>
 
+#include "buttonpopup.h"
 #include "detachedwindow.h"
 #include "linkpreviewoverlay.h"
+#include "mindmapviewwindow2.h"
 #include "outlineprovider.h"
 #include "viewsplit2.h"
 #include "viewwindow2.h"
@@ -117,6 +120,14 @@ ViewArea2::ViewArea2(ServiceLocator &p_services, QWidget *p_parent)
 }
 
 ViewArea2::~ViewArea2() {
+  // QWidget deletes child windows after our registries are destroyed, while
+  // QPointer<ViewArea2> is still live. Protected teardown publishes outline changes.
+  for (auto *window : std::as_const(m_windows)) {
+    disconnect(window, nullptr, this, nullptr);
+    if (const auto provider = window->getOutlineProvider()) {
+      disconnect(provider.data(), nullptr, this, nullptr);
+    }
+  }
   clearNavigation();
   // Normal close/quit already passed cancellable gates. This is resource teardown only.
   for (const auto &host : m_previewHosts) {
@@ -919,12 +930,12 @@ ViewSplit2 *ViewArea2::splitForWorkspace(const QString &p_workspaceId) const {
 bool ViewArea2::isPreviewSourceCurrent(ID p_sourceId, quint64 p_generation) const {
   const auto *source = windowForId(p_sourceId);
   const auto *owner = source ? owningSplitForWindow(p_sourceId) : nullptr;
-  // Opening a sibling preview selects it and hides a nested source tab. That
-  // tab remains current in its visible source-bound host, not in a hidden or
-  // retired ordinary workspace.
+  // Opening a sibling preview hides its source tab. A still-live host retains that
+  // source through close consent so a final topic draft can be captured. Admission
+  // separately rejects Checking/Accepted hosts in isPreviewWorkspaceAvailable().
   const bool available =
-      source && (source->isVisible() || (owner && owner->isPreview() &&
-                                         isPreviewWorkspaceAvailable(owner->getWorkspaceId())));
+      source && (source->isVisible() ||
+                 (owner && owner->isPreview() && isPreviewWorkspaceLive(owner->getWorkspaceId())));
   return source && source->getViewWindowId() == p_sourceId && source->isEnabled() && available &&
          source->getBufferGeneration() == p_generation && source->getBuffer().isValid() &&
          !source->getBuffer().getBuffer().isEmpty() &&
@@ -953,38 +964,115 @@ bool ViewArea2::isOutlineHeadingCurrent(ID p_sourceId, quint64 p_generation, int
 
 bool ViewArea2::navigateToOutlineHeading(ID p_sourceId, quint64 p_generation, int p_headingIndex,
                                          const QByteArray &p_fingerprint) {
-  const QPointer<ViewArea2> self(this);
   const QPointer<ViewWindow2> source(windowForId(p_sourceId));
-  const QPointer<ViewSplit2> owner(owningSplitForWindow(p_sourceId));
-  if (!source || !owner || source->getBufferGeneration() != p_generation) {
-    return false;
-  }
-  const QString workspace = owner->getWorkspaceId();
-  const QString bufferId = source->getBuffer().id();
-  if (owner->isPreview()) {
-    m_controller->setActivePreviewWindow(workspace, p_sourceId, bufferId);
-  }
-  if (!self || !source || !owner || source->getBufferGeneration() != p_generation ||
-      windowForId(p_sourceId) != source || owningSplitForWindow(p_sourceId) != owner) {
-    return false;
-  }
-  // Unlike the ordinary-workspace focus command, this also handles a source tab
-  // nested in a preview and an original source in a detached window.
-  setCurrentBuffer(workspace, bufferId, true);
-  if (!self || !source || !owner || windowForId(p_sourceId) != source ||
-      source->getBufferGeneration() != p_generation || source->getBuffer().id() != bufferId ||
-      owner->getCurrentViewWindow() != source) {
+  if (!source || !isPreviewSourceCurrent(p_sourceId, p_generation)) {
     return false;
   }
   if (!isOutlineHeadingCurrent(p_sourceId, p_generation, p_headingIndex, p_fingerprint)) {
     source->showMessage(tr("The outline has changed. Reopen the mind map to navigate."));
     return false;
   }
-  const QPointer<OutlineProvider> provider(source->getOutlineProvider().data());
-  // Each source owns its existing Read/Edit/PDF navigation policy. The receiver
-  // can retire this view synchronously; no source/provider state is read afterward.
-  emit provider->headingClicked(p_headingIndex);
-  return true;
+  // Leave the preview's current tab and keyboard focus intact, even for nested sources.
+  return source->activateOutlineHeading(p_headingIndex);
+}
+
+OutlineSourceSnapshot ViewArea2::outlineSourceSnapshot(ID p_sourceId, quint64 p_generation) const {
+  const QPointer<ViewWindow2> source(windowForId(p_sourceId));
+  auto *buffers = m_services.get<BufferService>();
+  if (!source || !isPreviewSourceCurrent(p_sourceId, p_generation) || !buffers ||
+      source->m_bufferReplacementInProgress || source->m_contentReplacementFrozen ||
+      source->isOutlineSourceEditBusy() ||
+      (source->isContentProtected() && buffers->isProtectedLocking())) {
+    return {};
+  }
+  const QPointer<const ViewArea2> self(this);
+  const QString bufferId = source->getBuffer().id();
+  const auto snapshot = source->outlineSourceSnapshot();
+  if (!self || !source || windowForId(p_sourceId) != source ||
+      source->getBuffer().id() != bufferId || !isPreviewSourceCurrent(p_sourceId, p_generation)) {
+    return {};
+  }
+  return snapshot;
+}
+
+QSharedPointer<OutlineSourceEditReceipt>
+ViewArea2::applyOutlineSourceEdit(ID p_sourceId, quint64 p_generation,
+                                  const OutlineSourceEdit &p_edit, bool p_focus) {
+  const QPointer<ViewWindow2> source(windowForId(p_sourceId));
+  auto *buffers = m_services.get<BufferService>();
+  if (!source || !isPreviewSourceCurrent(p_sourceId, p_generation) || !buffers ||
+      source->m_bufferReplacementInProgress || source->m_contentReplacementFrozen ||
+      source->isOutlineSourceEditBusy() ||
+      (source->isContentProtected() && buffers->isProtectedLocking())) {
+    return {};
+  }
+  auto lease = source->getBuffer().isEncrypted() ? source->getBuffer().acquireProtectedLease()
+                                                 : std::shared_ptr<ProtectedBufferLease>();
+  if (source->getBuffer().isEncrypted() && (!lease || !lease->isCurrent())) {
+    return {};
+  }
+  return source->applyOutlineSourceEdit(p_edit, p_focus);
+}
+
+bool ViewArea2::confirmOutlineSourceMove(ID p_sourceId, quint64 p_generation,
+                                         const OutlineSourceEdit &p_edit) {
+  if (p_edit.m_kind != OutlineSourceEdit::Kind::Move || !p_edit.m_placement.isValid()) {
+    return false;
+  }
+  const QPointer<ViewArea2> self(this);
+  const QPointer<ViewWindow2> source(windowForId(p_sourceId));
+  if (!source) {
+    return false;
+  }
+  const QString bufferId = source->getBuffer().id();
+  const auto currentSnapshot = [&]() {
+    if (!self || !source || self->windowForId(p_sourceId) != source ||
+        source->getBuffer().id() != bufferId) {
+      return OutlineSourceSnapshot();
+    }
+    return self->outlineSourceSnapshot(p_sourceId, p_generation);
+  };
+  // Snapshot capture validates the active writer and releases any protected lease.
+  // No source lease may survive the modal approval phase.
+  const auto before = currentSnapshot();
+  const int heading = p_edit.m_placement.m_sourceHeadingIndex;
+  if (!self || !source || before.m_revision < 0 || !before.m_outline ||
+      before.m_revision != p_edit.m_expectedRevision ||
+      before.m_outline->navigationFingerprint() != p_edit.m_expectedFingerprint || heading < 0 ||
+      heading >= before.m_outline->m_headings.size() ||
+      before.m_outline->m_headings.at(heading).m_isPlaceholder) {
+    return false;
+  }
+  QPointer<QMessageBox> dialog(new QMessageBox(
+      QMessageBox::Question,
+      QCoreApplication::translate("vnotex::OutlineViewer", "Reorder Outline"),
+      QCoreApplication::translate(
+          "vnotex::OutlineViewer",
+          "Move heading \"%1\" and its content block to the selected outline position?")
+          .arg(before.m_outline->m_headings.at(heading).m_name),
+      QMessageBox::Yes | QMessageBox::No, window()));
+  const auto cleanup = qScopeGuard([dialog] { delete dialog.data(); });
+  dialog->setInformativeText(QCoreApplication::translate(
+      "vnotex::OutlineViewer",
+      "Heading levels in the moved block will be adjusted to preserve the outline hierarchy."));
+  dialog->setDefaultButton(QMessageBox::No);
+  if (dialog->exec() != QMessageBox::Yes || !self || !source || !dialog) {
+    return false;
+  }
+  const auto after = currentSnapshot();
+  // A format-only QTextDocument revision may advance while the modal is open.
+  // The text generation and outline identity must remain exact; apply uses this
+  // fresh snapshot's live revision immediately afterward.
+  return self && source && after.m_revision >= 0 && after.m_outline &&
+         after.m_contentGeneration == before.m_contentGeneration &&
+         after.m_outline->navigationFingerprint() == p_edit.m_expectedFingerprint;
+}
+
+bool ViewArea2::synchronizeOutlineMindMapTopics(ID p_previewId,
+                                                const QVector<m3::qt::OutlineEntry> &p_entries) {
+  auto *preview = qobject_cast<MindMapViewWindow2 *>(windowForId(p_previewId));
+  return preview && preview->getViewWindowId() == p_previewId &&
+         preview->isOutlineMindMapPreview() && preview->synchronizeOutlineSourceTopics(p_entries);
 }
 
 ViewSplit2 *ViewArea2::hostedSplitForWorkspace(const QString &p_workspaceId) const {
@@ -1036,11 +1124,15 @@ QString ViewArea2::previewWorkspaceForWindow(ID p_windowId) const {
   return QString();
 }
 
-bool ViewArea2::isPreviewWorkspaceAvailable(const QString &p_workspaceId) const {
+bool ViewArea2::isPreviewWorkspaceLive(const QString &p_workspaceId) const {
   const auto host = m_previewHosts.constFind(p_workspaceId);
   return host != m_previewHosts.constEnd() && host->overlay && host->overlay->isVisible() &&
          host->source && host->source == windowForId(host->sourceId) &&
-         isPreviewSourceCurrent(host->sourceId, host->generation) &&
+         isPreviewSourceCurrent(host->sourceId, host->generation);
+}
+
+bool ViewArea2::isPreviewWorkspaceAvailable(const QString &p_workspaceId) const {
+  return isPreviewWorkspaceLive(p_workspaceId) &&
          !m_controller->isPreviewWorkspaceClosing(p_workspaceId);
 }
 
@@ -1147,14 +1239,65 @@ bool ViewArea2::hostPreviewWorkspace(ID p_sourceId, quint64 p_generation,
 }
 
 void ViewArea2::removePreviewWorkspaceHost(const QString &p_workspaceId) {
+  const QPointer<ViewArea2> guard(this);
   const bool active = m_controller->getCurrentWorkspaceId() == p_workspaceId;
+  // Rebinding clears the source identity; retain it before retiring this host.
+  const auto host = m_previewHosts.value(p_workspaceId);
+  const QPointer<ViewSplit2> owner(host.source ? owningSplitForWindow(host.sourceId) : nullptr);
+  const QPointer<QWidget> window(host.source ? host.source->window() : nullptr);
+  const auto *focus = QApplication::focusWidget();
+  const bool restoreContent = host.overlay && host.overlay->isVisible() && host.source &&
+                              host.source->isVisible() && host.source->isEnabled() && owner &&
+                              owner->getCurrentViewWindow() == host.source &&
+                              (!focus || focus == owner || owner->isAncestorOf(focus));
   rebindPreviewWorkspaceSource(p_workspaceId, 0);
-  const auto host = m_previewHosts.take(p_workspaceId);
+  m_previewHosts.remove(p_workspaceId);
   if (host.overlay) {
-    host.overlay->hide();
-    host.overlay->deleteLater();
+    if (restoreContent) {
+      connect(
+          host.overlay, &QObject::destroyed, this,
+          [this, source = host.source, sourceId = host.sourceId, generation = host.generation,
+           owner, window] {
+            // Native preview children must be gone before restoring the content proxy.
+            if (!source || !owner || !window || source->window() != window ||
+                !window->isActiveWindow() || windowForId(sourceId) != source ||
+                owningSplitForWindow(sourceId) != owner ||
+                owner->getCurrentViewWindow() != source ||
+                !isPreviewSourceCurrent(sourceId, generation) ||
+                source->m_bufferReplacementInProgress || source->m_contentReplacementFrozen ||
+                !previewWorkspaceForWindow(sourceId).isEmpty() ||
+                QApplication::activeModalWidget() || ButtonPopup::activePopupWidget()) {
+              return;
+            }
+            const auto *currentFocus = QApplication::focusWidget();
+            if (currentFocus && currentFocus != owner && !owner->isAncestorOf(currentFocus)) {
+              return;
+            }
+            source->setFocus(Qt::OtherFocusReason);
+          },
+          Qt::QueuedConnection);
+      // Hiding a focused subtree walks the top-level focus chain into dock/toolbar chrome.
+      // Leave focus empty for the queued restore; a subsequent explicit focus change still wins.
+      for (int pass = 0; pass < 2 && host.overlay; ++pass) {
+        auto *currentFocus = QApplication::focusWidget();
+        if (!currentFocus ||
+            (currentFocus != host.overlay && !host.overlay->isAncestorOf(currentFocus))) {
+          break;
+        }
+        currentFocus->clearFocus();
+        if (!guard) {
+          return;
+        }
+      }
+    }
+    if (host.overlay) {
+      host.overlay->hide();
+      if (host.overlay) {
+        host.overlay->deleteLater();
+      }
+    }
   }
-  if (active) {
+  if (guard && active) {
     m_controller->clearActivePreviewWindow();
   }
 }
@@ -1237,6 +1380,18 @@ bool ViewArea2::eventFilter(QObject *p_object, QEvent *p_event) {
     break;
   }
   return QWidget::eventFilter(p_object, p_event);
+}
+
+void ViewArea2::registerViewWindow(ID p_windowId, ViewWindow2 *p_window) {
+  m_windows[p_windowId] = p_window;
+  p_window->setViewWindowId(p_windowId);
+  connect(p_window, &QObject::destroyed, this, [this, p_windowId](QObject *p_object) {
+    // Hidden owners may delete directly; an old view must not erase its replacement.
+    const auto entry = m_windows.constFind(p_windowId);
+    if (entry != m_windows.cend() && entry.value() == p_object) {
+      m_windows.erase(entry);
+    }
+  });
 }
 
 ViewWindow2 *ViewArea2::windowForId(ID p_windowId) const {
@@ -1477,25 +1632,93 @@ void ViewArea2::wireOutlineMindMapSignals(ViewWindow2 *p_window) {
       m_controller->isOutlineMindMapPreview(p_window->getBuffer());
   p_window->m_isProtectedOutlineMindMapPreview =
       m_controller->isProtectedOutlineMindMapPreview(p_window->getBuffer());
+  p_window->m_outlineMindMapHasSectionNumber =
+      m_controller->getOutlineMindMapHasSectionNumber(p_window->getBuffer());
   if (p_window->m_isProtectedOutlineMindMapPreview && p_window->m_printAction) {
     p_window->m_printAction->setEnabled(false);
   }
   const QPointer<ViewArea2> self(this);
   const QPointer<ViewWindow2> window(p_window);
+  p_window->m_outlineSourceRetirementBlocked = [self, window] {
+    return self && window &&
+           (self->m_controller->isOutlineMindMapEditBusy(window->getBuffer()) ||
+            self->m_controller->isOutlineMindMapSourceBusy(window->getViewWindowId()));
+  };
   p_window->m_closeOutlineMindMapPreviews = [self, window] {
     return !self || !window ||
-           self->m_controller->closeOutlineMindMapPreviews(window->getViewWindowId());
+           (!self->m_controller->isOutlineMindMapEditBusy(window->getBuffer()) &&
+            self->m_controller->closeOutlineMindMapPreviews(window->getViewWindowId()));
   };
+  const auto reconcileSource = [self, window] {
+    if (!self || !window || self->windowForId(window->getViewWindowId()) != window) {
+      return;
+    }
+    const ID id = window->getViewWindowId();
+    const auto generation = window->getBufferGeneration();
+    self->m_controller->reconcileOutlineMindMapSource(id, generation);
+  };
+  connect(p_window, &ViewWindow2::outlineSourceChanged, this, reconcileSource);
+  if (const auto provider = p_window->getOutlineProvider()) {
+    connect(provider.data(), &OutlineProvider::outlineChanged, this, reconcileSource);
+  }
   if (p_window->m_isOutlineMindMapPreview) {
+    const auto generation = p_window->getBufferGeneration();
+    const QString bufferId = p_window->getBuffer().id();
+    const auto current = [self, window, generation, bufferId] {
+      return self && window && self->windowForId(window->getViewWindowId()) == window &&
+             window->getBufferGeneration() == generation && window->getBuffer().id() == bufferId &&
+             window->isOutlineMindMapPreview();
+    };
+    if (auto *preview = qobject_cast<MindMapViewWindow2 *>(p_window)) {
+      connect(m_controller, &ViewAreaController::outlineMindMapEditPendingChanged, preview,
+              [preview, current](ID p_id, bool p_pending) {
+                if (current() && preview->getViewWindowId() == p_id)
+                  preview->setOutlineSourceEditPending(p_pending);
+              });
+      preview->setOutlineSourceEditHandler(
+          [self, window,
+           current](const m3::qt::SourceEdit &p_edit) -> std::optional<m3::qt::SourceEditCommand> {
+            if (!current()) {
+              return std::nullopt;
+            }
+            const Buffer2 snapshot = window->getBuffer();
+            QString error;
+            auto command = self->m_controller->applyOutlineMindMapEdit(snapshot, p_edit, &error);
+            if (!command && current() && window->isVisible() && !error.isEmpty()) {
+              window->showMessage(error);
+            }
+            return command;
+          },
+          [self, window, current](const m3::qt::SourceEdit &p_edit) {
+            if (!current()) {
+              return false;
+            }
+            const Buffer2 snapshot = window->getBuffer();
+            QString error;
+            const bool approved =
+                self->m_controller->approveOutlineMindMapEdit(snapshot, p_edit, &error);
+            if (!approved && current() && window->isVisible() && !error.isEmpty()) {
+              window->showMessage(error);
+            }
+            return approved && current();
+          });
+      connect(preview, &MindMapViewWindow2::outlineSourceEditPublished, this,
+              [self, window, current] {
+                if (current()) {
+                  const Buffer2 snapshot = window->getBuffer();
+                  self->m_controller->finishOutlineMindMapEdit(snapshot);
+                }
+              });
+    }
     connect(p_window, &ViewWindow2::outlineMindMapNodeRequested, this,
-            [self, window](const QString &p_nodeId) {
-              if (!self || !window) {
+            [self, window, current](const QString &p_nodeId) {
+              if (!current()) {
                 return;
               }
               const Buffer2 snapshot = window->getBuffer();
               QString error;
               if (!self->m_controller->activateOutlineMindMapNode(snapshot, p_nodeId, &error) &&
-                  self && window && window->isVisible() && !error.isEmpty()) {
+                  current() && window->isVisible() && !error.isEmpty()) {
                 window->showMessage(error);
               }
             });
@@ -1506,22 +1729,34 @@ void ViewArea2::wireOutlineMindMapSignals(ViewWindow2 *p_window) {
     }
     const ID id = window->getViewWindowId();
     const auto generation = window->getBufferGeneration();
+    const auto sourceMode = window->getMode();
     const auto provider = window->getOutlineProvider();
     const Outline outline =
         provider && provider->getOutline() ? *provider->getOutline() : Outline();
     const int currentHeading = provider ? provider->getCurrentHeadingIndex() : -1;
     const Buffer2 source = window->getBuffer();
     QString error;
-    if (!self->m_controller->openOutlineMindMapPreview(source, outline, id, generation,
+    if (!self->m_controller->openOutlineMindMapPreview(source, outline, id, generation, sourceMode,
                                                        currentHeading, &error) &&
         self && window && self->isPreviewSourceCurrent(id, generation)) {
       window->showMessage(error);
     }
   });
+  if (p_window->m_isOutlineMindMapPreview) {
+    // Construction loads the map before its snapshot policy is wired. Refresh before showing it.
+    p_window->handleEditorConfigChange();
+  }
 }
 
 void ViewArea2::openBuffer(const Buffer2 &p_buffer, const QString &p_fileType,
                            const QString &p_workspaceId, const FileOpenSettings &p_settings) {
+  const bool locked = p_buffer.isEncrypted() && p_buffer.editorType().isEmpty();
+  auto *factory = m_services.get<ViewWindowFactory>();
+  if (!locked && (!factory || !factory->hasCreator(p_fileType))) {
+    qWarning() << "ViewArea2: no creator for file type" << p_fileType;
+    emit viewWindowCreationFailed(p_fileType, p_buffer.nodeId().relativePath);
+    return;
+  }
   const ID homeId = splitForWorkspace(p_workspaceId) ? loneHomeWindowId() : 0;
   auto *split = hostedSplitForWorkspace(p_workspaceId);
   if (split && split->isPreview() && !isPreviewWorkspaceAvailable(p_workspaceId)) {
@@ -1529,13 +1764,6 @@ void ViewArea2::openBuffer(const Buffer2 &p_buffer, const QString &p_fileType,
   }
   if (!split) {
     qWarning() << "ViewArea2::openBuffer: workspace not found:" << p_workspaceId;
-    return;
-  }
-  const bool locked = p_buffer.isEncrypted() && p_buffer.editorType().isEmpty();
-  auto *factory = m_services.get<ViewWindowFactory>();
-  if (!locked && (!factory || !factory->hasCreator(p_fileType))) {
-    qWarning() << "ViewArea2: no creator for file type" << p_fileType;
-    emit viewWindowCreationFailed(p_fileType, p_buffer.nodeId().relativePath);
     return;
   }
   const QPointer<ViewWindow2> previousWindow(split->getCurrentViewWindow());
@@ -1566,8 +1794,7 @@ void ViewArea2::openBuffer(const Buffer2 &p_buffer, const QString &p_fileType,
     }
     wireOutlineMindMapSignals(win);
     id = m_nextWindowId++;
-    m_windows[id] = win;
-    win->setViewWindowId(id);
+    registerViewWindow(id, win);
     split->addViewWindow(win);
     // addViewWindow explicitly shows even a non-current tab. Preserve the
     // previous selection and keep the background editor hidden.
@@ -1583,6 +1810,10 @@ void ViewArea2::openBuffer(const Buffer2 &p_buffer, const QString &p_fileType,
 
   if (!win || findWindowIdByBufferId(p_workspaceId, p_buffer.id()) != id) {
     return;
+  }
+  // A new detached host stays hidden until its first view has been admitted.
+  if (auto *host = qobject_cast<DetachedWindow *>(win->window()); host && !host->isVisible()) {
+    host->show();
   }
   // Select a focused open after registration and its after-open hook, as for
   // ordinary tab creation. The first tab was reconciled after membership add.
@@ -1661,8 +1892,7 @@ void ViewArea2::openWidgetContent(IViewWindowContent *p_content, const Buffer2 &
 
   auto *win = new WidgetViewWindow2(m_services, p_buffer, p_content, split);
   ID id = m_nextWindowId++;
-  m_windows[id] = win;
-  win->setViewWindowId(id);
+  registerViewWindow(id, win);
   split->addViewWindow(win);
   connect(win, &ViewWindow2::closeRequested, this,
           [this, id]() { m_controller->closeViewWindow(id, true); });
@@ -1678,7 +1908,11 @@ void ViewArea2::openWidgetContent(IViewWindowContent *p_content, const Buffer2 &
 }
 
 void ViewArea2::applyFileOpenSettings(ID p_windowId, const FileOpenSettings &p_settings) {
-  auto *win = windowForId(p_windowId);
+  QPointer<ViewWindow2> win(windowForId(p_windowId));
+  if (win && p_settings.m_forceMode) {
+    // Keep each viewer's supported modes and existing save/discard flow authoritative.
+    win->setMode(p_settings.m_mode);
+  }
   if (win) {
     win->applyFileOpenSettings(p_settings);
   }
@@ -1686,7 +1920,7 @@ void ViewArea2::applyFileOpenSettings(ID p_windowId, const FileOpenSettings &p_s
 
 bool ViewArea2::setNoteConversionFrozen(const QVector<ID> &p_windowIds, bool p_frozen) {
   for (const ID id : p_windowIds) {
-    if (!windowForId(id)) {
+    if (!windowForId(id) || (p_frozen && windowForId(id)->isOutlineSourceRetirementBlocked())) {
       return false;
     }
   }
@@ -1741,8 +1975,7 @@ bool ViewArea2::recreateNoteViews(
   // All replacement owners exist before any old document is released. Do not
   // call aboutToClose(): it saves dirty plaintext and runs legacy-asset cleanup.
   for (const auto &item : replacements) {
-    item.newWindow->setViewWindowId(item.id);
-    m_windows[item.id] = item.newWindow;
+    registerViewWindow(item.id, item.newWindow);
     if (item.split) {
       const QSignalBlocker blocker(item.split);
       const int index = item.split->indexOf(item.oldWindow);
@@ -1793,7 +2026,46 @@ bool ViewArea2::closeViewWindow(ID p_windowId, bool p_force) {
   if (!win->aboutToClose(p_force)) {
     return false;
   }
+  if (auto *preview = qobject_cast<MindMapViewWindow2 *>(win);
+      preview && preview->isOutlineMindMapPreview()) {
+    const QPointer<ViewArea2> self(this);
+    const QPointer<ViewWindow2> closing(win);
+    // Detach the writer/resource policy as well as native callbacks before deferred deletion.
+    closing->releaseBufferResources();
+    if (!self || !closing) {
+      return true;
+    }
+    if (windowForId(p_windowId) != closing) {
+      return false;
+    }
+  }
 
+  if (const auto *owner = owningSplitForWindow(p_windowId); owner && owner->isPreview()) {
+    const QPointer<ViewArea2> self(this);
+    const QPointer<ViewWindow2> closing(win);
+    const auto generation = win->getBufferGeneration();
+    // FocusOut may immediately return focus to a child. Reacquire and clear once more
+    // before tab removal hides the subtree and walks the main-window focus chain.
+    for (int pass = 0; pass < 2; ++pass) {
+      auto *focus = QApplication::focusWidget();
+      if (!focus || (focus != closing && !closing->isAncestorOf(focus))) {
+        break;
+      }
+      focus->clearFocus();
+      if (!self) {
+        return true;
+      }
+      const auto *registered = windowForId(p_windowId);
+      if (!registered) {
+        return true; // A reentrant close already completed; this is not cancellation.
+      }
+      if (!closing || registered != closing || closing->getBufferGeneration() != generation) {
+        // Replacement owns a new writer and requires its own close consent.
+        return false;
+      }
+    }
+  }
+  // FocusOut callbacks may move the accepted view: resolve its final owner now.
   auto *ownerSplit = owningSplitForWindow(p_windowId);
   DetachedWindow *ownerDetached = nullptr;
   QString bufferId;
@@ -2098,11 +2370,31 @@ void ViewArea2::hostWorkspaceInDetachedWindow(const QString &p_workspaceId) {
   auto *split = dw->getViewSplit();
 
   connect(dw, &DetachedWindow::closeRequested, this, &ViewArea2::onCloseDetachedWindow);
+  connect(split, &ViewSplit2::attachToMainWindowRequested, this, [this, dw]() {
+    const QPointer<ViewArea2> guard(this);
+    const QPointer<DetachedWindow> detached(dw);
+    // An active preview is a command target, not a main split to attach into.
+    m_controller->clearActivePreviewWindow();
+    if (!guard || !detached) {
+      return;
+    }
+    reattachDetachedWindow(detached);
+    if (!guard || m_detachedWindows.contains(detached.data())) {
+      return;
+    }
+    // Retire a pinned host before giving focus back to the main window.
+    if (detached) {
+      detached->hide();
+    }
+    auto *mainWindow = window();
+    mainWindow->setWindowState(mainWindow->windowState() & ~Qt::WindowMinimized);
+    mainWindow->show();
+    mainWindow->raise();
+    mainWindow->activateWindow();
+  });
 
-  // Wire the minimal subset of split signals needed for a detached window:
-  // tab close (routes through the controller) and current-tab tracking (updates
-  // the window title). Splitting/moving/workspace ops from a detached window are
-  // out of scope for now.
+  // Detached splits keep independent focus, tab closure and title tracking;
+  // ordinary main-split navigation actions remain unavailable.
   connect(split, &ViewSplit2::focused, this, [this](ViewSplit2 *) {
     // An ordinary detached editor is not its child preview's command target.
     m_controller->clearActivePreviewWindow();
@@ -2112,8 +2404,6 @@ void ViewArea2::hostWorkspaceInDetachedWindow(const QString &p_workspaceId) {
   connect(split, &ViewSplit2::currentViewWindowChanged, dw, [dw](ViewWindow2 *w) {
     dw->setWindowTitle(w ? w->getTitle() : qApp->applicationDisplayName());
   });
-
-  dw->show();
 }
 
 bool ViewArea2::moveViewWindowToDetached(ID p_windowId, const QString &p_srcWorkspaceId,
@@ -2143,6 +2433,8 @@ bool ViewArea2::moveViewWindowToDetached(ID p_windowId, const QString &p_srcWork
   srcSplit->takeViewWindow(win);
   dstSplit->addViewWindow(win);
   dstSplit->setCurrentViewWindow(win);
+  // Do not expose an empty native window before the transferred view is attached.
+  dstSplit->window()->show();
 
   // The source split may now be empty (e.g. detaching its only tab); refresh so
   // the Home dashboard is opened if the main area became empty.

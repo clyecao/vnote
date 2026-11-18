@@ -26,6 +26,7 @@
 #include <core/webresource.h>
 #include <core/widgetconfig.h>
 #include <gui/services/tooltipservice.h>
+#include <utils/docsutils.h>
 #include <utils/fileutils2.h>
 
 #include <temp_dir_fixture.h>
@@ -50,6 +51,11 @@ private slots:
   void testUpdateMainConfig();
   void testUpdateSessionConfig();
   void testQuickNoteDetachedSettingPersistsWithoutOtherChanges();
+  void testQuickNoteMigration_data();
+  void testQuickNoteMigration();
+  void testQuickNoteMigration_preservesUnreadableSession();
+  void testMarkdownExperienceMigration_data();
+  void testMarkdownExperienceMigration();
   void testEditorZoom_sessionPersistence_data();
   void testEditorZoom_sessionPersistence();
   void testDebouncing();
@@ -71,6 +77,11 @@ private slots:
   void testTableMigration_addsTableAndKeepsOtherChoices();
   void testTableMigration_leavesABlanketOptOutAlone();
   void testTableMigration_doesNotRunOnTheSameOrANewerVersion();
+  void testUnitedEntryMigration_preservesCustomAliasesAndIsIdempotent();
+  void testUnitedEntryMigration_preservesEmptyOptOut();
+  void testUnitedEntryMigration_respectsVersionBoundary_data();
+  void testUnitedEntryMigration_respectsVersionBoundary();
+  void testUnitedEntryMigration_persistsAndDoesNotRepeatOnRestart();
   void testPdfJsMigration_persistedListWinsOverTheCppDefault();
   void testPdfJsMigration_resetsTheV3ScriptListInMemoryAndOnSave();
   void testPdfJsMigration_doesNotRunOnTheSameOrANewerVersion();
@@ -83,10 +94,10 @@ private slots:
   void testAlignTableSource_jsonRoundTripAndAbsentKeyDefault();
   void testHeadingFolding_defaultsMergeAndRoundTrip();
   void testInactiveReaderTimeoutMinutes_roundTripAndNormalization();
-  void testConcealment_defaultsMergeAndPersistedOptOut();
-  void testConcealmentPreferences_persistIndependently();
+  void testConcealmentMode_ignoresOldPreferencesAndNormalizes();
+  void testConcealmentMode_persistsAllModes();
   void testAlwaysOpenNotesInNewTabs_defaultsMergeAndPersistedOptOut();
-  void testAutoSectionNumber_defaultsMergeAndPersistedOptOut();
+  void testAutoSectionNumber_defaultsMergeAndPersistedOptIn();
   void testEditSectionNumber_mergeAndIndependentPersistence();
   void testSectionNumberPattern_mergeNormalizationAndPersistence_data();
   void testSectionNumberPattern_mergeNormalizationAndPersistence();
@@ -117,6 +128,9 @@ private slots:
   void testToolTips_dailyRotationSurvivesReload();
   void testToolTips_localeFallbackAndInvalidCatalog();
   void testToolTips_progressMigratesToSession();
+  void testUpdateTimestamp_usesOnlySession_data();
+  void testUpdateTimestamp_usesOnlySession();
+  void testUpdateTimestamp_unreadableSessionIsPreserved();
 
 private:
   // Build an on-disk stand-in for the bundled vnote_extra.rcc tree.
@@ -277,6 +291,229 @@ void TestConfigMgr2::testQuickNoteDetachedSettingPersistsWithoutOtherChanges() {
   QVERIFY(!reloadedAgain.getSessionConfig().getQuickNoteSchemes().first().m_detachedView);
 }
 
+void TestConfigMgr2::testQuickNoteMigration_data() {
+  QTest::addColumn<QString>("previousVersion");
+  QTest::addColumn<QJsonObject>("savedSession");
+  QTest::addColumn<bool>("invokeHookDirectly");
+  QTest::addColumn<bool>("expectDefault");
+  const QJsonObject empty{{QStringLiteral("quickNoteSchemes"), QJsonArray()}};
+  const QJsonObject missing{{QStringLiteral("core"), QJsonObject()}};
+  const QJsonObject custom{
+      {QStringLiteral("quickNoteSchemes"),
+       QJsonArray{QJsonObject{{QStringLiteral("name"), QStringLiteral("My capture")},
+                              {QStringLiteral("folderPath"), QStringLiteral("")},
+                              {QStringLiteral("noteName"), QStringLiteral("capture.md")},
+                              {QStringLiteral("template"), QStringLiteral("custom.md")},
+                              {QStringLiteral("detachedView"), true}}}}};
+  QTest::newRow("legacy-empty") << QStringLiteral("4.12.0") << empty << false << true;
+  QTest::newRow("legacy-missing") << QStringLiteral("4.12.0") << missing << false << true;
+  QTest::newRow("legacy-custom") << QStringLiteral("4.12.0") << custom << false << false;
+  // The current binary is still 4.14.1: test the next upgrade's gate directly.
+  QTest::newRow("previous-release-hook") << QStringLiteral("4.14.1") << empty << true << true;
+  QTest::newRow("migration-boundary") << QStringLiteral("4.14.2") << empty << false << false;
+  QTest::newRow("newer-version") << QStringLiteral("4.15.0") << empty << false << false;
+  QTest::newRow("same-version") << ConfigMgr2::getApplicationVersion() << empty << false << false;
+}
+
+void TestConfigMgr2::testQuickNoteMigration() {
+  QFETCH(QString, previousVersion);
+  QFETCH(QJsonObject, savedSession);
+  QFETCH(bool, invokeHookDirectly);
+  QFETCH(bool, expectDefault);
+  const auto originalMain = m_configService->getConfigByName(DataLocation::App, "vnotex");
+  const auto originalSession = m_configService->getConfigByName(DataLocation::Local, "session");
+  const auto restore = qScopeGuard([&]() {
+    m_configService->updateConfigByName(DataLocation::App, "vnotex", originalMain);
+    m_configService->updateConfigByName(DataLocation::Local, "session", originalSession);
+  });
+  const QJsonObject main{
+      {QStringLiteral("metadata"), QJsonObject{{QStringLiteral("version"), previousVersion}}}};
+  QVERIFY(!m_configService->updateConfigByName(DataLocation::App, "vnotex", main));
+  QVERIFY(!m_configService->updateConfigByName(DataLocation::Local, "session", savedSession));
+  const auto key = QStringLiteral("quickNoteSchemes");
+  const auto expected = expectDefault ? SessionConfig(nullptr).toJson().value(key).toArray()
+                                      : savedSession.value(key).toArray();
+  TempDirFixture tmp;
+  QVERIFY(tmp.isValid());
+  const auto fixture = buildExtraDataFixture(tmp);
+  {
+    ConfigMgr2 mgr(m_configService);
+    mgr.setExtraDataSourceRootOverrideForTesting(fixture);
+    mgr.init();
+    QCOMPARE(mgr.getSessionConfig().toJson().value(key).toArray(),
+             savedSession.value(key).toArray());
+    if (invokeHookDirectly) {
+      mgr.getSessionConfig().doVersionSpecificOverride(previousVersion);
+    }
+    mgr.initAfterQtAppStarted();
+    QCOMPARE(mgr.getSessionConfig().toJson().value(key).toArray(), expected);
+  }
+  QCOMPARE(m_configService->getConfigByName(DataLocation::Local, "session").value(key).toArray(),
+           expected);
+  {
+    ConfigMgr2 restarted(m_configService);
+    restarted.setExtraDataSourceRootOverrideForTesting(fixture);
+    restarted.init();
+    QVERIFY(!restarted.isVersionChanged());
+    restarted.initAfterQtAppStarted();
+    QCOMPARE(restarted.getSessionConfig().toJson().value(key).toArray(), expected);
+    if (expectDefault) {
+      // A deliberate deletion after migration survives an ordinary restart.
+      restarted.getSessionConfig().setQuickNoteSchemes({});
+    }
+  }
+  if (expectDefault) {
+    ConfigMgr2 optedOut(m_configService);
+    optedOut.setExtraDataSourceRootOverrideForTesting(fixture);
+    optedOut.init();
+    optedOut.initAfterQtAppStarted();
+    QVERIFY(optedOut.getSessionConfig().getQuickNoteSchemes().isEmpty());
+  }
+}
+
+void TestConfigMgr2::testQuickNoteMigration_preservesUnreadableSession() {
+  const auto originalMain = m_configService->getConfigByName(DataLocation::App, "vnotex");
+  const auto originalSession = m_configService->getConfigByName(DataLocation::Local, "session");
+  const auto restore = qScopeGuard([&]() {
+    m_configService->updateConfigByName(DataLocation::App, "vnotex", originalMain);
+    m_configService->updateConfigByName(DataLocation::Local, "session", originalSession);
+  });
+  const QJsonObject main{{QStringLiteral("metadata"),
+                          QJsonObject{{QStringLiteral("version"), QStringLiteral("4.12.0")}}}};
+  QVERIFY(!m_configService->updateConfigByName(DataLocation::App, "vnotex", main));
+  QFile sessionFile(m_configService->getDataPath(DataLocation::Local) + "/session.json");
+  const QByteArray corrupt("{\"quickNoteSchemes\": [");
+  QVERIFY(sessionFile.open(QIODevice::WriteOnly | QIODevice::Truncate));
+  QCOMPARE(sessionFile.write(corrupt), corrupt.size());
+  sessionFile.close();
+  TempDirFixture tmp;
+  QVERIFY(tmp.isValid());
+  {
+    ConfigMgr2 mgr(m_configService);
+    mgr.setExtraDataSourceRootOverrideForTesting(buildExtraDataFixture(tmp));
+    mgr.init();
+    mgr.initAfterQtAppStarted();
+    QCOMPARE(mgr.getConfig().getVersion(), ConfigMgr2::getApplicationVersion());
+  }
+  QVERIFY(sessionFile.open(QIODevice::ReadOnly));
+  QCOMPARE(sessionFile.readAll(), corrupt);
+}
+
+void TestConfigMgr2::testMarkdownExperienceMigration_data() {
+  using Mode = MarkdownEditorConfig::ConcealmentMode;
+  QTest::addColumn<QString>("previousVersion");
+  QTest::addColumn<QString>("modeToken");
+  QTest::addColumn<int>("modeValue");
+  QTest::addColumn<QJsonValue>("confirmed");
+  QTest::addColumn<bool>("invokeHookDirectly");
+  QTest::addColumn<bool>("expectedConfirmed");
+  const QList<QPair<QString, Mode>> modes{{QStringLiteral("none"), Mode::None},
+                                          {QStringLiteral("passive"), Mode::Passive},
+                                          {QStringLiteral("moderate"), Mode::Moderate},
+                                          {QStringLiteral("aggressive"), Mode::Aggressive}};
+  for (const auto &mode : modes) {
+    const auto name = QStringLiteral("legacy-") + mode.first;
+    QTest::newRow(qPrintable(name))
+        << QStringLiteral("4.14.2") << mode.first << static_cast<int>(mode.second)
+        << QJsonValue(true) << false << false;
+  }
+  const auto addModerateCase = [](const char *p_name, const QString &p_version,
+                                  QJsonValue p_confirmed, bool p_direct, bool p_expected) {
+    QTest::newRow(p_name) << p_version << QStringLiteral("moderate")
+                          << static_cast<int>(Mode::Moderate) << p_confirmed << p_direct
+                          << p_expected;
+  };
+  addModerateCase("already-unconfirmed", QStringLiteral("4.14.2"), false, false, false);
+  addModerateCase("missing-confirmation", QStringLiteral("4.14.2"),
+                  QJsonValue(QJsonValue::Undefined), false, false);
+  // Exercise the next upgrade's gate while the application still carries the prior version.
+  addModerateCase("previous-release-hook", QStringLiteral("4.14.3"), true, true, false);
+  addModerateCase("migration-boundary", QStringLiteral("4.14.4"), true, false, true);
+  addModerateCase("newer-version", QStringLiteral("4.15.0"), true, false, true);
+  addModerateCase("same-version", ConfigMgr2::getApplicationVersion(), true, false, true);
+  // Fresh or unversioned profiles must retain explicitly suppressed prompts.
+  addModerateCase("missing-version", QString(), true, false, true);
+  addModerateCase("empty-version", QStringLiteral(""), true, false, true);
+  addModerateCase("invalid-version", QStringLiteral("unknown"), true, false, true);
+}
+
+void TestConfigMgr2::testMarkdownExperienceMigration() {
+  QFETCH(QString, previousVersion);
+  QFETCH(QString, modeToken);
+  QFETCH(int, modeValue);
+  QFETCH(QJsonValue, confirmed);
+  QFETCH(bool, invokeHookDirectly);
+  QFETCH(bool, expectedConfirmed);
+  const auto mode = static_cast<MarkdownEditorConfig::ConcealmentMode>(modeValue);
+  const auto originalMain = m_configService->getConfigByName(DataLocation::App, "vnotex");
+  const auto originalSession = m_configService->getConfigByName(DataLocation::Local, "session");
+  const auto restore = qScopeGuard([&]() {
+    m_configService->updateConfigByName(DataLocation::App, "vnotex", originalMain);
+    m_configService->updateConfigByName(DataLocation::Local, "session", originalSession);
+  });
+  QJsonObject main{{QStringLiteral("editor"),
+                    QJsonObject{{QStringLiteral("markdown_editor"),
+                                 QJsonObject{{QStringLiteral("concealmentMode"), modeToken}}}}}};
+  if (!previousVersion.isNull()) {
+    main.insert(QStringLiteral("metadata"),
+                QJsonObject{{QStringLiteral("version"), previousVersion}});
+  }
+  const auto key = QStringLiteral("hasConfirmedMarkdownEditorConcealment");
+  const QJsonObject session{{QStringLiteral("editor"), QJsonObject{{key, confirmed}}}};
+  QVERIFY(!m_configService->updateConfigByName(DataLocation::App, "vnotex", main));
+  QVERIFY(!m_configService->updateConfigByName(DataLocation::Local, "session", session));
+  TempDirFixture tmp;
+  QVERIFY(tmp.isValid());
+  const auto fixture = buildExtraDataFixture(tmp);
+  {
+    ConfigMgr2 mgr(m_configService);
+    mgr.setExtraDataSourceRootOverrideForTesting(fixture);
+    mgr.init();
+    QCOMPARE(mgr.getSessionConfig().getHasConfirmedMarkdownEditorConcealment(),
+             confirmed.toBool(false));
+    QCOMPARE(mgr.getEditorConfig().getMarkdownEditorConfig().getConcealmentMode(), mode);
+    if (invokeHookDirectly) {
+      mgr.getSessionConfig().doVersionSpecificOverride(previousVersion);
+    }
+    mgr.initAfterQtAppStarted();
+    QCOMPARE(mgr.getSessionConfig().getHasConfirmedMarkdownEditorConcealment(), expectedConfirmed);
+    QCOMPARE(mgr.getEditorConfig().getMarkdownEditorConfig().getConcealmentMode(), mode);
+  }
+  const auto persistedFlag = m_configService->getConfigByName(DataLocation::Local, "session")
+                                 .value(QStringLiteral("editor"))
+                                 .toObject()
+                                 .value(key);
+  QCOMPARE(persistedFlag.toBool(false), expectedConfirmed);
+  if (!confirmed.isUndefined()) {
+    QCOMPARE(persistedFlag, QJsonValue(expectedConfirmed));
+  }
+  const QStringList modePath{QStringLiteral("editor"), QStringLiteral("markdown_editor"),
+                             QStringLiteral("concealmentMode")};
+  QCOMPARE(valueAt(m_configService->getConfigByName(DataLocation::App, "vnotex"), modePath),
+           QJsonValue(modeToken));
+  {
+    ConfigMgr2 restarted(m_configService);
+    restarted.setExtraDataSourceRootOverrideForTesting(fixture);
+    restarted.init();
+    QVERIFY(!restarted.isVersionChanged());
+    QCOMPARE(restarted.getSessionConfig().getHasConfirmedMarkdownEditorConcealment(),
+             expectedConfirmed);
+    restarted.initAfterQtAppStarted();
+    QCOMPARE(restarted.getSessionConfig().getHasConfirmedMarkdownEditorConcealment(),
+             expectedConfirmed);
+    QCOMPARE(restarted.getEditorConfig().getMarkdownEditorConfig().getConcealmentMode(), mode);
+    // Showing the prompt consumes it. Ordinary restarts must not reset it again.
+    restarted.getSessionConfig().setHasConfirmedMarkdownEditorConcealment(true);
+  }
+  ConfigMgr2 confirmedAgain(m_configService);
+  confirmedAgain.setExtraDataSourceRootOverrideForTesting(fixture);
+  confirmedAgain.init();
+  QVERIFY(confirmedAgain.getSessionConfig().getHasConfirmedMarkdownEditorConcealment());
+  confirmedAgain.initAfterQtAppStarted();
+  QVERIFY(confirmedAgain.getSessionConfig().getHasConfirmedMarkdownEditorConcealment());
+  QCOMPARE(confirmedAgain.getEditorConfig().getMarkdownEditorConfig().getConcealmentMode(), mode);
+}
+
 void TestConfigMgr2::testEditorZoom_sessionPersistence_data() {
   QTest::addColumn<QJsonObject>("initialSession");
   QTest::addColumn<double>("initialMindMapZoom");
@@ -348,15 +585,6 @@ void TestConfigMgr2::testEditorZoom_sessionPersistence() {
       session.setTypstZoomFactor(state.m_typst);
       // Destruction flushes the normal pending write without event-loop timing dependencies.
     }
-    const QJsonObject expectedEditor{
-        {QStringLiteral("markdownZoomFactorInReadMode"), state.m_markdown},
-        {QStringLiteral("textEditorZoomDelta"), state.m_text},
-        {QStringLiteral("mindMapZoomFactor"), state.m_mindMap},
-        {QStringLiteral("typstZoomFactor"), state.m_typst}};
-    QCOMPARE(m_configService->getConfigByName(DataLocation::Local, QStringLiteral("session"))
-                 .value(QStringLiteral("editor"))
-                 .toObject(),
-             expectedEditor);
     QCOMPARE(m_configService->getConfigByName(DataLocation::App, QStringLiteral("vnotex")),
              mainBefore);
 
@@ -827,6 +1055,145 @@ void TestConfigMgr2::testTableMigration_doesNotRunOnTheSameOrANewerVersion() {
   QCOMPARE(mdConfig.getInplacePreviewSources(), Sources(Source::ImageLink));
 }
 
+void TestConfigMgr2::testUnitedEntryMigration_preservesCustomAliasesAndIsIdempotent() {
+  MainConfig config(m_configMgr);
+  auto &core = config.getCoreConfig();
+  const QJsonObject customLower{{QStringLiteral("name"), QStringLiteral("n")},
+                                {QStringLiteral("description"), QStringLiteral("My search")},
+                                {QStringLiteral("value"), QStringLiteral("find --scope folder")}};
+  const QJsonObject customUpper{{QStringLiteral("name"), QStringLiteral("N")},
+                                {QStringLiteral("description"), QStringLiteral("My history")},
+                                {QStringLiteral("value"), QStringLiteral("history")}};
+  const QJsonObject customOther{{QStringLiteral("name"), QStringLiteral("mine")},
+                                {QStringLiteral("value"), QStringLiteral("windows")}};
+  core.setUnitedEntryAlias(QJsonArray{customLower, customUpper, customOther});
+
+  // Already-upgraded 4.14.0 profiles still need the fix on their next version change.
+  config.doVersionSpecificOverride(QStringLiteral("4.14.0"));
+  const auto migrated = core.getUnitedEntryAlias();
+  QCOMPARE(migrated.at(0).toObject(), customLower);
+  QCOMPARE(migrated.at(1).toObject(), customUpper);
+  QCOMPARE(migrated.at(2).toObject(), customOther);
+  QMap<QString, QString> commands;
+  for (const auto &alias : migrated) {
+    const auto object = alias.toObject();
+    const auto name = object.value(QStringLiteral("name")).toString();
+    QVERIFY2(!commands.contains(name), qPrintable(name));
+    commands.insert(name, object.value(QStringLiteral("value")).toString());
+  }
+  const QMap<QString, QString> expected{
+      {QStringLiteral("n"), QStringLiteral("find --scope folder")},
+      {QStringLiteral("N"), QStringLiteral("history")},
+      {QStringLiteral("mine"), QStringLiteral("windows")},
+      {QStringLiteral("g"), QStringLiteral("find --scope notebook --object content")},
+      {QStringLiteral("G"), QStringLiteral("find --scope all_notebook --object content")},
+      {QStringLiteral("b"), QStringLiteral("find --scope buffer --object content")},
+      {QStringLiteral("f"), QStringLiteral("find --scope folder --object name")},
+      {QStringLiteral("t"), QStringLiteral("find --scope notebook --object tag")},
+      {QStringLiteral("T"), QStringLiteral("find --scope all_notebook --object tag")}};
+  QCOMPARE(commands, expected);
+
+  config.doVersionSpecificOverride(QStringLiteral("4.14.0"));
+  QCOMPARE(core.getUnitedEntryAlias(), migrated);
+  MainConfig reloaded(m_configMgr);
+  reloaded.fromJson(config.toJson());
+  QCOMPARE(reloaded.getCoreConfig().getUnitedEntryAlias(), migrated);
+}
+
+void TestConfigMgr2::testUnitedEntryMigration_preservesEmptyOptOut() {
+  MainConfig config(m_configMgr);
+  config.getCoreConfig().setUnitedEntryAlias(QJsonArray());
+  config.doVersionSpecificOverride(QStringLiteral("4.14.0"));
+  QVERIFY(config.getCoreConfig().getUnitedEntryAlias().isEmpty());
+  MainConfig reloaded(m_configMgr);
+  reloaded.fromJson(config.toJson());
+  QVERIFY(reloaded.getCoreConfig().getUnitedEntryAlias().isEmpty());
+}
+
+void TestConfigMgr2::testUnitedEntryMigration_respectsVersionBoundary_data() {
+  QTest::addColumn<QString>("previousVersion");
+  QTest::newRow("migration-version") << QStringLiteral("4.14.1");
+  QTest::newRow("newer-version") << QStringLiteral("4.15.0");
+}
+
+void TestConfigMgr2::testUnitedEntryMigration_respectsVersionBoundary() {
+  QFETCH(QString, previousVersion);
+  MainConfig config(m_configMgr);
+  const QJsonArray aliases{QJsonObject{{QStringLiteral("name"), QStringLiteral("mine")},
+                                       {QStringLiteral("value"), QStringLiteral("history")}}};
+  config.getCoreConfig().setUnitedEntryAlias(aliases);
+  config.doVersionSpecificOverride(previousVersion);
+  QCOMPARE(config.getCoreConfig().getUnitedEntryAlias(), aliases);
+}
+
+void TestConfigMgr2::testUnitedEntryMigration_persistsAndDoesNotRepeatOnRestart() {
+  const auto original = m_configService->getConfigByName(DataLocation::App, "vnotex");
+  const auto restore = qScopeGuard([&]() {
+    m_configService->updateConfigByName(DataLocation::App, QStringLiteral("vnotex"), original);
+  });
+  const QJsonArray oldAliases{
+      QJsonObject{{QStringLiteral("name"), QStringLiteral("n")},
+                  {QStringLiteral("value"), QStringLiteral("find --scope notebook --object name")}},
+      QJsonObject{
+          {QStringLiteral("name"), QStringLiteral("g")},
+          {QStringLiteral("value"), QStringLiteral("find --scope notebook --object content")}},
+      QJsonObject{
+          {QStringLiteral("name"), QStringLiteral("b")},
+          {QStringLiteral("value"), QStringLiteral("find --scope buffer --object content")}}};
+  const QJsonObject onDisk{
+      {QStringLiteral("metadata"),
+       QJsonObject{{QStringLiteral("version"), QStringLiteral("4.13.0")}}},
+      {QStringLiteral("core"), QJsonObject{{QStringLiteral("unitedEntry"),
+                                            QJsonObject{{QStringLiteral("alias"), oldAliases}}}}}};
+  QVERIFY(
+      !m_configService->updateConfigByName(DataLocation::App, QStringLiteral("vnotex"), onDisk));
+  TempDirFixture tmp;
+  QVERIFY(tmp.isValid());
+  const auto fixture = buildExtraDataFixture(tmp);
+  QJsonArray migrated;
+  {
+    ConfigMgr2 mgr(m_configService);
+    mgr.setExtraDataSourceRootOverrideForTesting(fixture);
+    mgr.init();
+    QCOMPARE(mgr.getCoreConfig().getUnitedEntryAlias(), oldAliases);
+    QVERIFY(mgr.isVersionChanged());
+    mgr.initAfterQtAppStarted();
+    migrated = mgr.getCoreConfig().getUnitedEntryAlias();
+    QMap<QString, QString> added;
+    for (int i = oldAliases.size(); i < migrated.size(); ++i) {
+      const auto alias = migrated.at(i).toObject();
+      const auto name = alias.value(QStringLiteral("name")).toString();
+      QVERIFY(!added.contains(name));
+      added.insert(name, alias.value(QStringLiteral("value")).toString());
+    }
+    const QMap<QString, QString> expectedAdded{
+        {QStringLiteral("N"), QStringLiteral("find --scope all_notebook --object name")},
+        {QStringLiteral("G"), QStringLiteral("find --scope all_notebook --object content")},
+        {QStringLiteral("f"), QStringLiteral("find --scope folder --object name")},
+        {QStringLiteral("t"), QStringLiteral("find --scope notebook --object tag")},
+        {QStringLiteral("T"), QStringLiteral("find --scope all_notebook --object tag")}};
+    QCOMPARE(added, expectedAdded);
+  } // ConfigMgr2 flushes its pending write on destruction.
+  {
+    ConfigMgr2 reloaded(m_configService);
+    reloaded.setExtraDataSourceRootOverrideForTesting(fixture);
+    reloaded.init();
+    QCOMPARE(reloaded.getCoreConfig().getUnitedEntryAlias(), migrated);
+    QCOMPARE(reloaded.getConfig().getVersion(), ConfigMgr2::getApplicationVersion());
+    QVERIFY(!reloaded.isVersionChanged());
+    // Deliberately remove the newly supplied aliases after upgrading.
+    reloaded.getCoreConfig().setUnitedEntryAlias(oldAliases);
+  }
+  {
+    ConfigMgr2 restarted(m_configService);
+    restarted.setExtraDataSourceRootOverrideForTesting(fixture);
+    restarted.init();
+    QVERIFY(!restarted.isVersionChanged());
+    restarted.initAfterQtAppStarted();
+    QCOMPARE(restarted.getCoreConfig().getUnitedEntryAlias(), oldAliases);
+  }
+}
+
 void TestConfigMgr2::testAlignTableSource_jsonRoundTripAndAbsentKeyDefault() {
   MainConfig config(m_configMgr);
   auto &mdConfig = config.getEditorConfig().getMarkdownEditorConfig();
@@ -921,62 +1288,115 @@ void TestConfigMgr2::testInactiveReaderTimeoutMinutes_roundTripAndNormalization(
   }
 }
 
-void TestConfigMgr2::testConcealment_defaultsMergeAndPersistedOptOut() {
+void TestConfigMgr2::testConcealmentMode_ignoresOldPreferencesAndNormalizes() {
+  using Mode = MarkdownEditorConfig::ConcealmentMode;
   const auto original =
       m_configService->getConfigByName(DataLocation::App, QStringLiteral("vnotex"));
   const auto restore = qScopeGuard([&] {
     m_configService->updateConfigByName(DataLocation::App, QStringLiteral("vnotex"), original);
   });
   const QStringList path{QStringLiteral("editor"), QStringLiteral("markdown_editor"),
-                         QStringLiteral("concealment")};
+                         QStringLiteral("concealmentMode")};
   MainConfig defaults(m_configMgr);
   const auto loaded = loadThroughMergePath(withoutKeyAt(defaults.toJson(), path));
-  QCOMPARE(valueAt(loaded, path), QJsonValue(true));
+  QCOMPARE(valueAt(loaded, path), QJsonValue(QStringLiteral("aggressive")));
 
-  {
-    ConfigMgr2 settings(m_configService);
-    settings.init();
-    settings.getEditorConfig().getMarkdownEditorConfig().setConcealmentEnabled(false);
-    // Destruction flushes the normal pending write, as at application shutdown.
+  for (const bool destinations : {false, true}) {
+    for (const bool markers : {false, true}) {
+      QJsonObject markdown{{QStringLiteral("concealment"), destinations},
+                           {QStringLiteral("concealMarkdownMarkers"), markers}};
+      const auto legacy =
+          loadThroughMergePath(QJsonObject{{path[0], QJsonObject{{path[1], markdown}}}});
+      QCOMPARE(valueAt(legacy, path), QJsonValue(QStringLiteral("aggressive")));
+      const auto normalized = valueAt(legacy, {path[0], path[1]}).toObject();
+      QVERIFY(!normalized.contains(QStringLiteral("concealment")));
+      QVERIFY(!normalized.contains(QStringLiteral("concealMarkdownMarkers")));
+      {
+        ConfigMgr2 restarted(m_configService);
+        restarted.init();
+        QCOMPARE(restarted.getEditorConfig().getMarkdownEditorConfig().getConcealmentMode(),
+                 Mode::Aggressive);
+      }
+
+      // Old booleans cannot override an explicit choice of the new mode, either.
+      for (const auto mode : {Mode::Passive, Mode::Moderate}) {
+        const auto token =
+            mode == Mode::Passive ? QStringLiteral("passive") : QStringLiteral("moderate");
+        markdown[path[2]] = token;
+        const auto explicitMode =
+            loadThroughMergePath(QJsonObject{{path[0], QJsonObject{{path[1], markdown}}}});
+        QCOMPARE(valueAt(explicitMode, path), QJsonValue(token));
+        ConfigMgr2 restarted(m_configService);
+        restarted.init();
+        QCOMPARE(restarted.getEditorConfig().getMarkdownEditorConfig().getConcealmentMode(), mode);
+      }
+    }
   }
-  ConfigMgr2 restarted(m_configService);
-  restarted.init();
-  QVERIFY(!restarted.getEditorConfig().getMarkdownEditorConfig().getConcealmentEnabled());
+
+  const auto mixedCase = loadThroughMergePath(QJsonObject{
+      {path[0], QJsonObject{{path[1], QJsonObject{{path[2], QStringLiteral("MoDeRaTe")}}}}}});
+  QCOMPARE(valueAt(mixedCase, path), QJsonValue(QStringLiteral("moderate")));
+  {
+    ConfigMgr2 restarted(m_configService);
+    restarted.init();
+    QCOMPARE(restarted.getEditorConfig().getMarkdownEditorConfig().getConcealmentMode(),
+             Mode::Moderate);
+  }
+
+  for (const auto &invalid : {QJsonValue(QJsonValue::Null), QJsonValue(true), QJsonValue(42),
+                              QJsonValue(QString()), QJsonValue(QStringLiteral("unknown")),
+                              QJsonValue(QJsonArray()), QJsonValue(QJsonObject())}) {
+    const auto normalized = loadThroughMergePath(
+        QJsonObject{{path[0], QJsonObject{{path[1], QJsonObject{{path[2], invalid}}}}}});
+    QCOMPARE(valueAt(normalized, path), QJsonValue(QStringLiteral("aggressive")));
+    ConfigMgr2 restarted(m_configService);
+    restarted.init();
+    QCOMPARE(restarted.getEditorConfig().getMarkdownEditorConfig().getConcealmentMode(),
+             Mode::Aggressive);
+  }
 }
 
-void TestConfigMgr2::testConcealmentPreferences_persistIndependently() {
+void TestConfigMgr2::testConcealmentMode_persistsAllModes() {
+  using Mode = MarkdownEditorConfig::ConcealmentMode;
   const auto original =
       m_configService->getConfigByName(DataLocation::App, QStringLiteral("vnotex"));
   const auto restore = qScopeGuard([&] {
     m_configService->updateConfigByName(DataLocation::App, QStringLiteral("vnotex"), original);
   });
-  const QStringList markerPath{QStringLiteral("editor"), QStringLiteral("markdown_editor"),
-                               QStringLiteral("concealMarkdownMarkers")};
+  const QStringList path{QStringLiteral("editor"), QStringLiteral("markdown_editor"),
+                         QStringLiteral("concealmentMode")};
   MainConfig defaults(m_configMgr);
-  defaults.getEditorConfig().getMarkdownEditorConfig().setConcealmentEnabled(false);
-  const auto migrated = loadThroughMergePath(withoutKeyAt(defaults.toJson(), markerPath));
-  QCOMPARE(valueAt(migrated, markerPath), QJsonValue(true));
-  {
-    ConfigMgr2 settings(m_configService);
-    settings.init();
-    QVERIFY(!settings.getEditorConfig().getMarkdownEditorConfig().getConcealmentEnabled());
-  }
-
-  for (const bool destinations : {false, true}) {
-    for (const bool markers : {false, true}) {
-      {
-        ConfigMgr2 settings(m_configService);
-        settings.init();
-        auto &markdown = settings.getEditorConfig().getMarkdownEditorConfig();
-        markdown.setConcealmentEnabled(destinations);
-        markdown.setConcealMarkdownMarkersEnabled(markers);
-      }
-      ConfigMgr2 restarted(m_configService);
-      restarted.init();
-      const auto &markdown = restarted.getEditorConfig().getMarkdownEditorConfig();
-      QCOMPARE(markdown.getConcealmentEnabled(), destinations);
-      QCOMPARE(markdown.getConcealMarkdownMarkersEnabled(), markers);
+  QVERIFY(!loadThroughMergePath(defaults.toJson()).isEmpty());
+  struct Case {
+    Mode m_input;
+    Mode m_expected;
+    QString m_serialized;
+  };
+  const Case cases[]{{Mode::None, Mode::None, QStringLiteral("none")},
+                     {Mode::Passive, Mode::Passive, QStringLiteral("passive")},
+                     {Mode::Moderate, Mode::Moderate, QStringLiteral("moderate")},
+                     {Mode::Aggressive, Mode::Aggressive, QStringLiteral("aggressive")},
+                     {static_cast<Mode>(-1), Mode::Aggressive, QStringLiteral("aggressive")}};
+  for (const auto &testCase : cases) {
+    {
+      ConfigMgr2 settings(m_configService);
+      settings.init();
+      auto &markdown = settings.getEditorConfig().getMarkdownEditorConfig();
+      markdown.setConcealmentMode(testCase.m_input);
+      QCOMPARE(markdown.getConcealmentMode(), testCase.m_expected);
+      // Destruction flushes the normal pending write, as at application shutdown.
     }
+    const auto persisted =
+        m_configService->getConfigByName(DataLocation::App, QStringLiteral("vnotex"));
+    QCOMPARE(valueAt(persisted, path), QJsonValue(testCase.m_serialized));
+    const auto persistedMarkdown = valueAt(persisted, {path[0], path[1]}).toObject();
+    QVERIFY(!persistedMarkdown.contains(QStringLiteral("concealment")));
+    QVERIFY(!persistedMarkdown.contains(QStringLiteral("concealMarkdownMarkers")));
+    ConfigMgr2 restarted(m_configService);
+    restarted.init();
+    QCOMPARE(restarted.getEditorConfig().getMarkdownEditorConfig().getConcealmentMode(),
+             testCase.m_expected);
+    QCOMPARE(valueAt(restarted.getConfig().toJson(), path), QJsonValue(testCase.m_serialized));
   }
 }
 
@@ -1011,38 +1431,38 @@ void TestConfigMgr2::testAlwaysOpenNotesInNewTabs_defaultsMergeAndPersistedOptOu
   QVERIFY(!restarted.getCoreConfig().getAlwaysOpenNotesInNewTabs());
 }
 
-void TestConfigMgr2::testAutoSectionNumber_defaultsMergeAndPersistedOptOut() {
+void TestConfigMgr2::testAutoSectionNumber_defaultsMergeAndPersistedOptIn() {
   const QStringList path{QStringLiteral("editor"), QStringLiteral("markdown_editor"),
                          QStringLiteral("autoSectionNumber")};
   MainConfig defaults(m_configMgr);
   const auto defaultsJson = defaults.toJson();
-  QCOMPARE(valueAt(defaultsJson, path), QJsonValue(true));
+  QCOMPARE(valueAt(defaultsJson, path), QJsonValue(false));
   const auto loaded = loadThroughMergePath(withoutKeyAt(defaultsJson, path));
-  QCOMPARE(valueAt(loaded, path), QJsonValue(true));
+  QCOMPARE(valueAt(loaded, path), QJsonValue(false));
 
   {
     ConfigMgr2 mgr(m_configService);
     mgr.init();
     auto &editor = mgr.getConfig().getEditorConfig();
     auto &markdown = editor.getMarkdownEditorConfig();
-    QVERIFY(markdown.getAutoSectionNumberEnabled());
-    QCOMPARE(editor.getSectionNumberPattern(), QStringLiteral("1.1."));
+    QVERIFY(!markdown.getAutoSectionNumberEnabled());
+    QVERIFY(!markdown.getAutoSectionNumberInEditModeEnabled());
     QVERIFY(mgr.getConfig().getWidgetConfig().getOutlineAutoSectionNumberEnabled());
-    markdown.setAutoSectionNumberEnabled(false);
+    markdown.setAutoSectionNumberEnabled(true);
     // Destruction flushes the normal pending config write, as at application shutdown.
   }
 
   const auto persisted =
       m_configService->getConfigByName(DataLocation::App, QStringLiteral("vnotex"));
-  QCOMPARE(valueAt(persisted, path), QJsonValue(false));
+  QCOMPARE(valueAt(persisted, path), QJsonValue(true));
   const auto merged = loadThroughMergePath(persisted);
-  QCOMPARE(valueAt(merged, path), QJsonValue(false));
+  QCOMPARE(valueAt(merged, path), QJsonValue(true));
   ConfigMgr2 restarted(m_configService);
   restarted.init();
-  QVERIFY(!restarted.getConfig()
-               .getEditorConfig()
-               .getMarkdownEditorConfig()
-               .getAutoSectionNumberEnabled());
+  QVERIFY(restarted.getConfig()
+              .getEditorConfig()
+              .getMarkdownEditorConfig()
+              .getAutoSectionNumberEnabled());
 }
 
 void TestConfigMgr2::testEditSectionNumber_mergeAndIndependentPersistence() {
@@ -1577,58 +1997,85 @@ void TestConfigMgr2::testMindMapEditor_shortcutFilteringPreservesRawOverrides() 
 }
 
 void TestConfigMgr2::testHttpApi_mergeAndPersistence() {
-  // Exercise the actual absent-section and per-key merge before enabling a listener.
-  QVERIFY(!loadThroughMergePath(QJsonObject()).isEmpty());
+  const auto savedMain =
+      m_configService->getConfigByName(DataLocation::App, QStringLiteral("vnotex"));
+  const auto savedSession =
+      m_configService->getConfigByName(DataLocation::Local, QStringLiteral("session"));
+  const auto restore = qScopeGuard([&] {
+    m_configService->updateConfigByName(DataLocation::App, QStringLiteral("vnotex"), savedMain);
+    m_configService->updateConfigByName(DataLocation::Local, QStringLiteral("session"),
+                                        savedSession);
+  });
+  // Main-config listener values are ignored, not migrated into a local profile.
+  const QJsonObject mainBefore{
+      {QStringLiteral("metadata"),
+       QJsonObject{{QStringLiteral("version"), ConfigMgr2::getApplicationVersion()}}},
+      {QStringLiteral("httpApi"), QJsonObject{{QStringLiteral("enabled"), true},
+                                              {QStringLiteral("address"), QStringLiteral("::1")},
+                                              {QStringLiteral("port"), 34567}}}};
+  QVERIFY(
+      m_configService->updateConfigByName(DataLocation::App, QStringLiteral("vnotex"), mainBefore)
+          .isOk());
+  QVERIFY(m_configService
+              ->updateConfigByName(DataLocation::Local, QStringLiteral("session"), QJsonObject())
+              .isOk());
   {
     ConfigMgr2 mgr(m_configService);
     mgr.init();
-    auto &api = mgr.getConfig().getHttpApiConfig();
+    auto &api = mgr.getSessionConfig().getHttpApiConfig();
     QVERIFY(api.isValid());
     QVERIFY(!api.isEnabled());
     QCOMPARE(api.getAddress(), QStringLiteral("127.0.0.1"));
     QCOMPARE(api.getPort(), 18765);
+    QVERIFY(!mgr.getConfig().toJson().contains(QStringLiteral("httpApi")));
+
+    // Repeated loads reset omitted HTTP fields, without merging other session sections.
+    auto &session = mgr.getSessionConfig();
+    session.fromJson(QJsonObject{
+        {QStringLiteral("httpApi"), QJsonObject{{QStringLiteral("enabled"), true},
+                                                {QStringLiteral("address"), QStringLiteral("::1")},
+                                                {QStringLiteral("port"), 23456}}}});
+    session.fromJson(
+        QJsonObject{{QStringLiteral("httpApi"), QJsonObject{{QStringLiteral("enabled"), true}}}});
+    QVERIFY(api.isEnabled());
+    QCOMPARE(api.getAddress(), QStringLiteral("127.0.0.1"));
+    QCOMPARE(api.getPort(), 18765);
+    session.fromJson(QJsonObject());
+    QVERIFY(api.isValid());
+    QVERIFY(!api.isEnabled());
   }
-  QVERIFY(!loadThroughMergePath(QJsonObject{{QStringLiteral("httpApi"),
-                                             QJsonObject{{QStringLiteral("enabled"), true},
-                                                         {QStringLiteral("externalBaseUrl"),
-                                                          QJsonObject{{"obsolete", true}}}}}})
-               .isEmpty());
-  QString configFile;
+  QVERIFY(m_configService
+              ->updateConfigByName(DataLocation::Local, QStringLiteral("session"),
+                                   QJsonObject{{QStringLiteral("httpApi"),
+                                                QJsonObject{{QStringLiteral("enabled"), true},
+                                                            {QStringLiteral("externalBaseUrl"),
+                                                             QJsonObject{{"obsolete", true}}}}}})
+              .isOk());
   {
     ConfigMgr2 mgr(m_configService);
     mgr.init();
-    auto &api = mgr.getConfig().getHttpApiConfig();
+    auto &api = mgr.getSessionConfig().getHttpApiConfig();
     QVERIFY(api.isValid());
     QVERIFY(api.isEnabled());
     QCOMPARE(api.getPort(), 18765);
-    configFile = mgr.getFileFromConfigFolder(QStringLiteral("vnotex.json"));
-    QFile before(configFile);
-    QVERIFY(before.open(QIODevice::ReadOnly));
-    QVERIFY(QJsonDocument::fromJson(before.readAll())
-                .object()
-                .value("httpApi")
-                .toObject()
-                .value("externalBaseUrl")
-                .isObject());
-    before.close();
     api.setAddress(QStringLiteral("::1"));
     api.setPort(23456);
     QVERIFY(api.isValid());
   }
-  {
-    QFile after(configFile);
-    QVERIFY(after.open(QIODevice::ReadOnly));
-    const auto persisted =
-        QJsonDocument::fromJson(after.readAll()).object().value("httpApi").toObject();
-    QVERIFY(!persisted.contains("externalBaseUrl"));
-    QCOMPARE(persisted.value("enabled"), QJsonValue(true));
-    QCOMPARE(persisted.value("address").toString(), QStringLiteral("::1"));
-    QCOMPARE(persisted.value("port").toInt(), 23456);
-  }
+  const auto persisted =
+      m_configService->getConfigByName(DataLocation::Local, QStringLiteral("session"))
+          .value(QStringLiteral("httpApi"))
+          .toObject();
+  QVERIFY(!persisted.contains("externalBaseUrl"));
+  QCOMPARE(persisted.value("enabled"), QJsonValue(true));
+  QCOMPARE(persisted.value("address").toString(), QStringLiteral("::1"));
+  QCOMPARE(persisted.value("port").toInt(), 23456);
+  QCOMPARE(m_configService->getConfigByName(DataLocation::App, QStringLiteral("vnotex")),
+           mainBefore);
   {
     ConfigMgr2 restarted(m_configService);
     restarted.init();
-    auto &api = restarted.getConfig().getHttpApiConfig();
+    auto &api = restarted.getSessionConfig().getHttpApiConfig();
     QVERIFY(api.isValid());
     QVERIFY(api.isEnabled());
     QCOMPARE(api.getAddress(), QStringLiteral("::1"));
@@ -1637,7 +2084,7 @@ void TestConfigMgr2::testHttpApi_mergeAndPersistence() {
   }
   ConfigMgr2 disabled(m_configService);
   disabled.init();
-  auto &api = disabled.getConfig().getHttpApiConfig();
+  const auto &api = std::as_const(disabled).getSessionConfig().getHttpApiConfig();
   QVERIFY(api.isValid());
   QVERIFY(!api.isEnabled());
   QCOMPARE(api.getAddress(), QStringLiteral("::1"));
@@ -1681,25 +2128,35 @@ void TestConfigMgr2::testHttpApi_rejectsMalformedSettings_data() {
 
 void TestConfigMgr2::testHttpApi_rejectsMalformedSettings() {
   QFETCH(QJsonObject, patch);
-  QVERIFY(!loadThroughMergePath(patch).isEmpty());
+  const auto savedMain =
+      m_configService->getConfigByName(DataLocation::App, QStringLiteral("vnotex"));
+  const auto savedSession =
+      m_configService->getConfigByName(DataLocation::Local, QStringLiteral("session"));
+  const auto restore = qScopeGuard([&] {
+    m_configService->updateConfigByName(DataLocation::App, QStringLiteral("vnotex"), savedMain);
+    m_configService->updateConfigByName(DataLocation::Local, QStringLiteral("session"),
+                                        savedSession);
+  });
+  QVERIFY(m_configService->updateConfigByName(DataLocation::Local, QStringLiteral("session"), patch)
+              .isOk());
   QJsonObject rejected;
   {
     ConfigMgr2 mgr(m_configService);
     mgr.init();
-    auto &api = mgr.getConfig().getHttpApiConfig();
+    auto &api = mgr.getSessionConfig().getHttpApiConfig();
     QString error;
     QVERIFY(!api.isValid(&error));
     QVERIFY(!error.isEmpty());
     rejected = api.toJson();
     // An unrelated preference save must not normalize the invalid API fields into
     // valid defaults and silently permit startup on the next launch.
-    auto &core = mgr.getCoreConfig();
-    core.setAlwaysOpenNotesInNewTabs(!core.getAlwaysOpenNotesInNewTabs());
+    auto &session = mgr.getSessionConfig();
+    session.setTextEditorZoomDelta(session.getTextEditorZoomDelta() + 1);
   }
   {
     ConfigMgr2 restarted(m_configService);
     restarted.init();
-    auto &api = restarted.getConfig().getHttpApiConfig();
+    auto &api = restarted.getSessionConfig().getHttpApiConfig();
     QVERIFY(!api.isValid());
     QCOMPARE(api.toJson(), rejected);
     // Repair through the same setters used by Settings, rather than reconstructing config.
@@ -1710,8 +2167,8 @@ void TestConfigMgr2::testHttpApi_rejectsMalformedSettings() {
   }
   ConfigMgr2 repaired(m_configService);
   repaired.init();
-  QVERIFY(repaired.getConfig().getHttpApiConfig().isValid());
-  QVERIFY(!repaired.getConfig().getHttpApiConfig().isEnabled());
+  QVERIFY(repaired.getSessionConfig().getHttpApiConfig().isValid());
+  QVERIFY(!repaired.getSessionConfig().getHttpApiConfig().isEnabled());
 }
 
 // ============ Absent-key safety (the defaults merge) ============
@@ -1935,8 +2392,6 @@ void TestConfigMgr2::testAnExplicitlyEmptiedUserOwnedMapIsNotResurrected() {
 void TestConfigMgr2::testAnExplicitNullDeletesTheKey() {
   // Pinning merge_patch's (RFC 7386) null semantics: a JSON null DELETES the key rather than
   // selecting the default, so the ordinary read helper's zero value applies.
-  // HttpApiConfig deliberately preserves nulls to reject malformed security settings;
-  // its separate regression ensures this invalid state survives subsequent writes.
   MainConfig defaults(m_configMgr);
   const QJsonObject defaultsJson = defaults.toJson();
 
@@ -2616,6 +3071,7 @@ void TestConfigMgr2::testToolTips_localeFallbackAndInvalidCatalog() {
   const QLocale previousLocale;
   const auto restore = qScopeGuard([&] {
     QLocale::setDefault(previousLocale);
+    DocsUtils::setLocale(QStringLiteral("en_US"));
     m_configService->updateConfigByName(DataLocation::App, QStringLiteral("vnotex"), healthy);
     m_configService->updateConfigByName(DataLocation::Local, QStringLiteral("session"),
                                         healthySession);
@@ -2626,7 +3082,7 @@ void TestConfigMgr2::testToolTips_localeFallbackAndInvalidCatalog() {
   QVERIFY(!m_configService->updateConfigByName(
       DataLocation::App, QStringLiteral("vnotex"),
       QJsonObject{{"metadata", QJsonObject{{"version", ConfigMgr2::getApplicationVersion()}}},
-                  {"core", QJsonObject{{"toolTipsEnabled", true}}}}));
+                  {"core", QJsonObject{{"toolTipsEnabled", true}, {"locale", ""}}}}));
   const auto seed = [&](int p_index) {
     return m_configService->updateConfigByName(
         DataLocation::Local, QStringLiteral("session"),
@@ -2674,8 +3130,11 @@ void TestConfigMgr2::testToolTips_localeFallbackAndInvalidCatalog() {
        QStringLiteral("Last")},
   };
   for (const auto &test : cases) {
-    const auto restoreLocale = qScopeGuard([&] { QLocale::setDefault(previousLocale); });
-    QLocale::setDefault(QLocale(QString::fromLatin1(test.locale)));
+    const auto locale = QString::fromLatin1(test.locale);
+    const QLocale regionalLocale(locale == QStringLiteral("en_US") ? QStringLiteral("zh_CN")
+                                                                   : QStringLiteral("en_US"));
+    QLocale::setDefault(regionalLocale);
+    DocsUtils::setLocale(locale);
     QVERIFY(!seed(test.index));
     const auto path = tmp.createFile(QStringLiteral("selection.json"), test.catalog);
     ConfigMgr2 mgr(m_configService);
@@ -2692,6 +3151,7 @@ void TestConfigMgr2::testToolTips_localeFallbackAndInvalidCatalog() {
     QVERIFY(producer.showTipIfDue(today.addDays(1)));
     QCOMPARE(notifications.messages().size(), 2);
     QCOMPARE(notifications.messages().last().m_text, test.next);
+    QCOMPARE(QLocale(), regionalLocale);
   }
 
   QLocale::setDefault(QLocale(QStringLiteral("en_US")));
@@ -2824,6 +3284,142 @@ void TestConfigMgr2::testToolTips_progressMigratesToSession() {
   QVERIFY(producer.showTipIfDue(today));
   QCOMPARE(notifications.messages().size(), 1);
   QCOMPARE(notifications.messages().last().m_text, QStringLiteral("Tip A"));
+}
+
+void TestConfigMgr2::testUpdateTimestamp_usesOnlySession_data() {
+  QTest::addColumn<QJsonValue>("session");
+  QTest::addColumn<qint64>("expected");
+  QTest::addColumn<bool>("due");
+  const qint64 now = Q_INT64_C(1785337074532);
+  QTest::newRow("absent") << QJsonValue(QJsonValue::Undefined) << qint64(0) << true;
+  QTest::newRow("recent") << QJsonValue(QString::number(now - 1)) << now - 1 << false;
+  const qint64 expired = now - SessionConfig::c_updateCheckIntervalMs;
+  QTest::newRow("expired") << QJsonValue(QString::number(expired)) << expired << true;
+  QTest::newRow("reset") << QJsonValue("0") << qint64(0) << true;
+  QTest::newRow("null") << QJsonValue(QJsonValue::Null) << qint64(0) << true;
+}
+
+void TestConfigMgr2::testUpdateTimestamp_usesOnlySession() {
+  QFETCH(QJsonValue, session);
+  QFETCH(qint64, expected);
+  QFETCH(bool, due);
+  QTest::qWait(700);
+  const auto healthy = m_configService->getConfigByName(DataLocation::App, "vnotex");
+  const auto healthySession = m_configService->getConfigByName(DataLocation::Local, "session");
+  const auto restore = qScopeGuard([&] {
+    m_configService->updateConfigByName(DataLocation::App, "vnotex", healthy);
+    m_configService->updateConfigByName(DataLocation::Local, "session", healthySession);
+  });
+  const auto key = QStringLiteral("lastUpdateCheckTime");
+  const qint64 now = Q_INT64_C(1785337074532);
+  // An old app timestamp must neither suppress a check nor trigger a config rewrite.
+  QVERIFY(!m_configService->updateConfigByName(
+      DataLocation::App, "vnotex",
+      QJsonObject{{"metadata", QJsonObject{{"version", ConfigMgr2::getApplicationVersion()}}},
+                  {"core", QJsonObject{{key, QString::number(now)}}}}));
+  QJsonObject sessionCore;
+  sessionCore.insert(key, session);
+  QVERIFY(!m_configService->updateConfigByName(DataLocation::Local, "session",
+                                               QJsonObject{{"core", sessionCore}}));
+  QFile mainFile(m_configMgr->getAppDataPath() + QStringLiteral("/vnotex.json"));
+  QVERIFY(mainFile.open(QIODevice::ReadOnly));
+  const auto mainBytes = mainFile.readAll();
+  mainFile.close();
+  QFile sessionFile(m_configMgr->getUserConfigPath() + QStringLiteral("/session.json"));
+  QVERIFY(sessionFile.open(QIODevice::ReadOnly));
+  const auto sessionBytes = sessionFile.readAll();
+  sessionFile.close();
+  {
+    ConfigMgr2 mgr(m_configService);
+    mgr.init();
+    const auto &state = mgr.getSessionConfig();
+    QCOMPARE(state.getLastUpdateCheckTime(), expected);
+    QCOMPARE(state.isUpdateCheckDue(now, SessionConfig::c_updateCheckIntervalMs), due);
+  }
+  QVERIFY(mainFile.open(QIODevice::ReadOnly));
+  QCOMPARE(mainFile.readAll(), mainBytes);
+  mainFile.close();
+  QVERIFY(sessionFile.open(QIODevice::ReadOnly));
+  QCOMPARE(sessionFile.readAll(), sessionBytes);
+  sessionFile.close();
+  const qint64 next = now + 1000;
+  {
+    ConfigMgr2 mgr(m_configService);
+    mgr.init();
+    mgr.getSessionConfig().setLastUpdateCheckTime(next);
+  }
+  QVERIFY(mainFile.open(QIODevice::ReadOnly));
+  QCOMPARE(mainFile.readAll(), mainBytes);
+  mainFile.close();
+  QCOMPARE(m_configService->getConfigByName(DataLocation::Local, "session")
+               .value("core")
+               .toObject()
+               .value(key),
+           QJsonValue(QString::number(next)));
+  {
+    ConfigMgr2 mgr(m_configService);
+    mgr.init();
+    const auto &state = mgr.getSessionConfig();
+    QCOMPARE(state.getLastUpdateCheckTime(), next);
+    QVERIFY(!state.isUpdateCheckDue(next + SessionConfig::c_updateCheckIntervalMs - 1,
+                                    SessionConfig::c_updateCheckIntervalMs));
+    QVERIFY(state.isUpdateCheckDue(next + SessionConfig::c_updateCheckIntervalMs,
+                                   SessionConfig::c_updateCheckIntervalMs));
+  }
+  // Clearing session state must not fall back to the untouched app timestamp.
+  QVERIFY(!m_configService->updateConfigByName(DataLocation::Local, "session", QJsonObject()));
+  ConfigMgr2 reset(m_configService);
+  reset.init();
+  QCOMPARE(reset.getSessionConfig().getLastUpdateCheckTime(), qint64(0));
+}
+
+void TestConfigMgr2::testUpdateTimestamp_unreadableSessionIsPreserved() {
+  QTest::qWait(700);
+  const auto healthy = m_configService->getConfigByName(DataLocation::App, "vnotex");
+  const auto healthySession = m_configService->getConfigByName(DataLocation::Local, "session");
+  const auto restore = qScopeGuard([&] {
+    m_configService->updateConfigByName(DataLocation::App, "vnotex", healthy);
+    m_configService->updateConfigByName(DataLocation::Local, "session", healthySession);
+  });
+  const qint64 stamp = Q_INT64_C(1785337074532);
+  QVERIFY(!m_configService->updateConfigByName(
+      DataLocation::App, "vnotex",
+      QJsonObject{{"core", QJsonObject{{"lastUpdateCheckTime", QString::number(stamp)}}}}));
+  QFile mainFile(m_configMgr->getAppDataPath() + QStringLiteral("/vnotex.json"));
+  QVERIFY(mainFile.open(QIODevice::ReadOnly));
+  const auto mainBytes = mainFile.readAll();
+  mainFile.close();
+  QFile sessionFile(m_configMgr->getUserConfigPath() + QStringLiteral("/session.json"));
+  for (const QByteArray malformed : {QByteArray("{broken"), QByteArray("[]")}) {
+    QVERIFY(sessionFile.open(QIODevice::WriteOnly | QIODevice::Truncate));
+    QCOMPARE(sessionFile.write(malformed), qint64(malformed.size()));
+    sessionFile.close();
+    {
+      ConfigMgr2 mgr(m_configService);
+      mgr.init();
+      QVERIFY(!mgr.isSessionConfigLoaded());
+      mgr.getSessionConfig().setLastUpdateCheckTime(stamp + 1);
+      // Cover both the debounced writer and the destructor's pending-write flush.
+      QTest::qWait(700);
+      mgr.getSessionConfig().setLastUpdateCheckTime(stamp + 2);
+    }
+    QVERIFY(sessionFile.open(QIODevice::ReadOnly));
+    QCOMPARE(sessionFile.readAll(), malformed);
+    sessionFile.close();
+    QVERIFY(mainFile.open(QIODevice::ReadOnly));
+    QCOMPARE(mainFile.readAll(), mainBytes);
+    mainFile.close();
+  }
+  QVERIFY(!m_configService->updateConfigByName(DataLocation::Local, "session", QJsonObject()));
+  {
+    ConfigMgr2 repaired(m_configService);
+    repaired.init();
+    QCOMPARE(repaired.getSessionConfig().getLastUpdateCheckTime(), qint64(0));
+    repaired.getSessionConfig().setLastUpdateCheckTime(stamp + 3);
+  }
+  ConfigMgr2 reloaded(m_configService);
+  reloaded.init();
+  QCOMPARE(reloaded.getSessionConfig().getLastUpdateCheckTime(), stamp + 3);
 }
 
 } // namespace tests

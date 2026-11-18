@@ -1,20 +1,23 @@
 #include "notebooknodedelegate.h"
 
 #include <QApplication>
+#include <QFontMetricsF>
 #include <QLineEdit>
 #include <QPainter>
 #include <QTimer>
+#include <QtMath>
 
 #include "nodeiconhelper.h"
 #include <core/servicelocator.h>
 #include <gui/services/themeservice.h>
 #include <gui/utils/itemviewutils.h>
+#include <gui/utils/treeviewutils.h>
 #include <models/notebooknodemodel.h>
 
 using namespace vnotex;
 
 NotebookNodeDelegate::NotebookNodeDelegate(ServiceLocator &p_services, QObject *p_parent)
-    : QStyledItemDelegate(p_parent), m_services(p_services) {}
+    : TreeChildCountDelegate(p_parent), m_services(p_services) {}
 
 NotebookNodeDelegate::~NotebookNodeDelegate() {}
 
@@ -45,6 +48,7 @@ void NotebookNodeDelegate::paintNode(QPainter *p_painter, const QStyleOptionView
   // Get the widget style
   const QWidget *widget = p_option.widget;
   QStyle *style = widget ? widget->style() : QApplication::style();
+  const auto spacing = TreeViewUtils::horizontalSpacing(p_option, 8);
 
   // Draw custom node background if specified (before selection)
   QColor bgColor = getNodeBackgroundColor(p_nodeInfo, p_option);
@@ -58,7 +62,7 @@ void NotebookNodeDelegate::paintNode(QPainter *p_painter, const QStyleOptionView
 
   // Calculate icon rect
   QRect iconRect = p_option.rect;
-  iconRect.setLeft(iconRect.left() + m_hPadding);
+  iconRect.setLeft(iconRect.left() + spacing.m_left);
   iconRect.setWidth(m_iconSize);
   iconRect.setTop(iconRect.top() + (p_option.rect.height() - m_iconSize) / 2);
   iconRect.setHeight(m_iconSize);
@@ -69,9 +73,13 @@ void NotebookNodeDelegate::paintNode(QPainter *p_painter, const QStyleOptionView
     // Folders have no icon — reclaim icon space for text
     textRect.setLeft(iconRect.left());
   } else {
-    textRect.setLeft(iconRect.right() + m_hPadding);
+    textRect.setLeft(iconRect.right() + spacing.m_gap);
   }
-  textRect.setRight(p_option.rect.right() - m_hPadding);
+  textRect.setRight(p_option.rect.right() - spacing.m_right);
+  const auto badge = childCountBadge(p_option, p_nodeInfo.isFolder ? p_nodeInfo.childCount : 0);
+  if (!badge.m_rect.isEmpty()) {
+    textRect.setRight(qMin(textRect.right(), badge.m_rect.left() - badge.m_gap - 1));
+  }
 
   // Draw icon (files only — folders have no icon)
   if (!p_nodeInfo.isFolder) {
@@ -94,7 +102,7 @@ void NotebookNodeDelegate::paintNode(QPainter *p_painter, const QStyleOptionView
   // Prepare text for drawing
   QString text = p_nodeInfo.name;
   QFontMetrics fm(p_option.font);
-  QString elidedText = fm.elidedText(text, Qt::ElideRight, textRect.width());
+  QString elidedText = fm.elidedText(text, Qt::ElideRight, qMax(0, textRect.width()));
 
   // Determine text color:
   // 1. Custom color from node visual settings takes priority
@@ -134,24 +142,8 @@ void NotebookNodeDelegate::paintNode(QPainter *p_painter, const QStyleOptionView
   // Draw text
   p_painter->setPen(textColor);
   p_painter->setFont(p_option.font);
-  p_painter->drawText(textRect, Qt::AlignLeft | Qt::AlignVCenter, elidedText);
-
-  // Draw child count badge for containers
-  if (m_showChildCount && p_nodeInfo.isFolder) {
-    int count = p_nodeInfo.childCount;
-    if (count > 0) {
-      QString countText = QString("(%1)").arg(count);
-      int countWidth = fm.horizontalAdvance(countText);
-
-      QRect countRect = textRect;
-      countRect.setLeft(countRect.right() - countWidth - m_hPadding);
-
-      // Use same text color with reduced alpha for badge
-      QColor countColor = textColor;
-      countColor.setAlpha(150);
-      p_painter->setPen(countColor);
-      p_painter->drawText(countRect, Qt::AlignRight | Qt::AlignVCenter, countText);
-    }
+  if (textRect.width() > 0) {
+    p_painter->drawText(textRect, Qt::AlignLeft | Qt::AlignVCenter, elidedText);
   }
 
   // Draw focus rect if focused
@@ -162,6 +154,8 @@ void NotebookNodeDelegate::paintNode(QPainter *p_painter, const QStyleOptionView
     focusOpt.state |= QStyle::State_KeyboardFocusChange;
     style->drawPrimitive(QStyle::PE_FrameFocusRect, &focusOpt, p_painter, widget);
   }
+
+  paintChildCount(p_painter, badge, p_option);
 
   p_painter->restore();
 }
@@ -182,22 +176,20 @@ QSize NotebookNodeDelegate::sizeHint(const QStyleOptionViewItem &p_option,
     return QStyledItemDelegate::sizeHint(p_option, p_index);
   }
 
-  // Mirror the geometry of paintNode(): leading padding, icon (files only),
-  // text, optional child count badge and trailing padding.
-  int width = m_hPadding;
+  // Mirror paintNode(): style insets, icon (files only), text and optional badge.
+  const auto spacing = TreeViewUtils::horizontalSpacing(opt, 8);
+  int width = spacing.m_left;
   if (!nodeInfo.isFolder) {
-    width += m_iconSize + m_hPadding;
+    width += m_iconSize + spacing.m_gap;
   }
 
-  width += fm.horizontalAdvance(nodeInfo.name);
+  // elidedText() uses fractional advances; rounding down can hide the final glyph.
+  width += qCeil(QFontMetricsF(opt.font).horizontalAdvance(nodeInfo.name));
 
-  if (m_showChildCount && nodeInfo.isFolder && nodeInfo.childCount > 0) {
-    // The badge is painted inside the text rect, overlaying its tail, so its
-    // width has to be reserved here.
-    width += fm.horizontalAdvance(QString("(%1)").arg(nodeInfo.childCount)) + m_hPadding;
-  }
+  // Reserve clearance so maximum horizontal scrolling reveals the full name.
+  width += childCountWidth(opt, nodeInfo.isFolder ? nodeInfo.childCount : 0);
 
-  width += m_hPadding;
+  width += spacing.m_right;
 
   // No tree indentation here: QTreeView::sizeHintForColumn() adds it.
   return QSize(width, height);
@@ -228,10 +220,6 @@ void NotebookNodeDelegate::setEditorData(QWidget *p_editor, const QModelIndex &p
     QTimer::singleShot(0, lineEdit, [lineEdit, lastDot]() { lineEdit->setSelection(0, lastDot); });
   }
 }
-
-void NotebookNodeDelegate::setShowChildCount(bool p_show) { m_showChildCount = p_show; }
-
-bool NotebookNodeDelegate::showChildCount() const { return m_showChildCount; }
 
 QColor NotebookNodeDelegate::getNodeBackgroundColor(const NodeInfo &p_nodeInfo,
                                                     const QStyleOptionViewItem &p_option) const {

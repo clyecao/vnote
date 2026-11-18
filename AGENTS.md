@@ -356,15 +356,17 @@ or installation is added to them.
 > remain usable from read-only installations (`/usr/bin`, Program Files, a read-only DMG;
 > issue #2728), without probing install-directory writability.
 
-The sole installation exception is an **explicit Windows “Update Now” notification action**
-launching the deployed external PowerShell script. Keep “Check Release” first and available;
-the manual-check dialog is unchanged and has no automatic-install entry point. The action
-must disclose downloading, closing and reopening VNote; checks never activate it themselves.
+The sole installation exception is an **explicit Windows “Update Now” action** from the
+startup notification or manual-check dialog, launching the deployed external PowerShell script.
+Keep “Check Release” first in notifications and “Open Release Page” available in the dialog.
+The action must disclose downloading, closing and reopening VNote, and must not be the
+manual dialog's default button; checks never activate it themselves.
 
-The external updater must authenticate the offered version's signed full-package manifest
-with the bundled minisign verifier before using it, then verify the archive and payload.
-It consumes no deltas, never falls back to another source or unsigned artifacts, and requests
-shutdown only after preparation succeeds. A launch-scoped, PID/token-authenticated pipe and
+The external updater must authenticate the offered version's signed manifest with the
+bundled minisign verifier, then verify a full package or reconstruct the complete target
+payload from an eligible delta. It never falls back to another source or unsigned artifacts,
+and requests shutdown only after preparation succeeds.
+A launch-scoped, PID/token-authenticated pipe and
 an explicit accepted close authorize installation; cancellation or pipe EOF does not. Wait
 for the original process to exit, including save/sync drains, without force-killing it.
 
@@ -383,8 +385,9 @@ Repo-wide forbidden patterns (also constrain CI, packaging, controllers and widg
 - **Never** give `UpdateService` a `ConfigMgr2` dependency — add policy to the controller.
 - **Never** restore the C++ installer, delta application or a general-purpose quit CLI/protocol.
 
-The Windows release publishes a signed full-package manifest and may also publish
-unused delta ZIPs. Signing and external-verifier contract: [docs/update-signing.md](docs/update-signing.md).
+The Windows release publishes a signed full-package manifest and optional delta ZIPs.
+External-only delta eligibility and safe full fallback:
+[docs/update-signing.md](docs/update-signing.md).
 Controller launch/shutdown ownership: [src/controllers/AGENTS.md § Update Check](src/controllers/AGENTS.md#update-check).
 Endpoints, source-scoped redirects and check threading:
 [src/core/services/AGENTS.md § Update Check](src/core/services/AGENTS.md#update-check).
@@ -430,6 +433,36 @@ Clean up only residue proven to come from the agent's workflow: when `git diff H
 empty and staged/unstaged formatting hunks are exact inverses, `git restore --staged -- <path>`
 resynchronizes the index without changing the working file. An empty HEAD diff alone does not
 justify clearing intentional user staging. Never use blanket reset/restore or stash for cleanup.
+
+---
+
+## Configuration Ownership
+
+Before adding an option or state field, agents MUST choose its owner by meaning and scope:
+
+| Kind of value | Owner | Examples |
+|---------------|-------|----------|
+| Portable user preferences | `MainConfig` in `vnotex.json` (`DataLocation::App`), using the relevant child config | Theme, editor behavior, update-check enablement and release source |
+| Machine/profile-local settings and persisted runtime state | `SessionConfig` in `session.json` (`DataLocation::Local`) | Local HTTP listener settings, window layout, recent history, tooltip progress, `lastUpdateCheckTime` |
+| Transient runtime state | The owning controller/service in memory, not either config file | In-flight flags, pending requests, temporary handles |
+
+`SessionConfig` **persists across launches**; it does not mean process-lifetime-only storage.
+Agents MUST NOT put timestamps, counters, or other runtime bookkeeping in `MainConfig` merely
+because they must survive a restart. Keep each field in one owning config and use its typed
+`ConfigMgr2` accessor; do not duplicate it across app and session config. Credentials and tokens
+belong in the existing keychain/private credential store, never ordinary app/session JSON.
+See [configuration ownership and access](src/core/AGENTS.md#configmgr2-vs-configcoreservice-critical--read-before-using-config)
+and the migration requirements below when changing an existing field's owner.
+
+---
+
+## Configuration Migrations
+
+Every configuration default, schema, or bundled-entry change MUST assess existing saved
+configurations, not just fresh profiles. If saved values mask a required change, add a
+version-gated migration in `MainConfig::doVersionSpecificOverride()`; otherwise record why
+no migration is needed. Preserve custom values and explicit opt-outs, and verify upgrade,
+persistence, and restart behavior. See [the configuration migration contract](src/core/AGENTS.md#configuration-migration-contract).
 
 ---
 

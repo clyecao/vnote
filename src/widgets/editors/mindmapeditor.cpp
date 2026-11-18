@@ -149,6 +149,8 @@ MindMapEditor::MindMapEditor(ServiceLocator &p_services, const Buffer2 &p_buffer
       markModified();
     }
   });
+  connect(this, &m3::qt::MindMapEditor::pendingEditChanged, this,
+          [this](bool) { emit insertionAvailabilityChanged(); });
   connect(this, &m3::qt::MindMapEditor::nodeImageActivated, this,
           [this](const QString &, const QImage &p_image) { showImage(p_image); });
   connect(this, &m3::qt::MindMapEditor::nodeImageContextMenuRequested, this,
@@ -263,7 +265,7 @@ void MindMapEditor::onEditNote(const QString &p_nodeId) {
             guard->m_buffer.getBuffer().isEmpty()) {
           return VXCORE_ERR_INVALID_STATE;
         }
-        if (guard->isReadOnly() || guard->m_buffer.isReadOnly()) {
+        if (guard->isReadOnly() || guard->isBasicMode() || guard->m_buffer.isReadOnly()) {
           return VXCORE_ERR_READ_ONLY;
         }
         if (!guard->isEnabled()) {
@@ -483,7 +485,8 @@ void MindMapEditor::applyConfig(bool p_allowSeparatePropertiesPanel) {
   const m3::qt::EditorConfig::Style style{settings.getFontFamily(), settings.getFontPointSize()};
   setConfirmSubtreeDeletion(settings.getConfirmSubtreeDeletion());
   setAutoRandomBranchColor(settings.getAutoRandomBranchColor());
-  const bool numbering = settings.getAutoSectionNumbering();
+  const bool numbering = settings.getAutoSectionNumbering() &&
+                         !(m_viewWindow && m_viewWindow->getOutlineMindMapHasSectionNumber());
   const bool separateProperties =
       p_allowSeparatePropertiesPanel && settings.getSeparateNodePropertiesPanel();
   const auto pattern = manager->getEditorConfig().getSectionNumberPattern();
@@ -512,8 +515,8 @@ bool MindMapEditor::canUseBuffer() const {
 }
 
 bool MindMapEditor::canEdit() const {
-  return m_contentLoaded && !m_loading && isEnabled() && !isReadOnly() && !m_buffer.isReadOnly() &&
-         canUseBuffer();
+  return m_contentLoaded && !m_loading && isEnabled() && !isReadOnly() && !isBasicMode() &&
+         !m_buffer.isReadOnly() && canUseBuffer();
 }
 
 void MindMapEditor::markModified() {
@@ -809,6 +812,13 @@ MindMapEditor::MimeSnapshot MindMapEditor::snapshotMimeData(const QMimeData *p_s
 }
 
 bool MindMapEditor::canInsert() const { return canEdit() && selectedNodeIds().size() == 1; }
+
+bool MindMapEditor::canReorderOutline() const { return canEdit() && !hasPendingEdit(); }
+
+bool MindMapEditor::reorderOutlineNode(const QString &p_sourceId, const QString &p_parentId,
+                                       int p_index) {
+  return canReorderOutline() && m3::qt::MindMapEditor::moveNode(p_sourceId, p_parentId, p_index);
+}
 
 bool MindMapEditor::canInsertFromMimeData(const QMimeData *p_source,
                                           MimeInsertionSource p_origin) const {

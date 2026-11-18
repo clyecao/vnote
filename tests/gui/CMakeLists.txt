@@ -182,6 +182,12 @@ add_qt_test(test_tag_view_drag_drop
     vxcore
 )
 
+# Fixed viewport badges, rendered with real tree geometry.
+add_qt_test(test_treechildcountdelegate
+  SOURCES test_treechildcountdelegate.cpp
+  LINKS Qt6::Widgets
+)
+
 # Horizontal scrolling helper for the QTreeView family. Needs a real
 # QApplication (QTEST_MAIN) so viewport geometry and indexAt() are meaningful.
 add_qt_test(test_treehorizontalscroll
@@ -211,8 +217,7 @@ add_qt_test(test_notebooknodedelegate_sizehint
 )
 
 # TreeViewUtils is header-only (see src/gui/utils/treeviewutils.h), so this
-# target needs no extra SOURCES and no extra LINKS. The five call sites are
-# covered by the grep gate tests/utils/test_tree_indentation_drift.cpp.
+# target needs no extra SOURCES and no extra LINKS.
 add_qt_test(test_treeviewindentation
   SOURCES
     test_treeviewindentation.cpp

@@ -169,6 +169,7 @@ target_link_libraries(vnote PRIVATE
     Qt::Widgets
     core_services
     vnote_httpapi
+    cmark
     VTextEdit
     qhotkey
     vxcore
@@ -191,6 +192,17 @@ endif()
 
 # Copy the qt.conf on Windows
 if(WIN32)
+    # Refresh the helper even when only the script changes (no executable relink).
+    add_custom_target(vnote_windows_context_menu
+        COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:vnote>"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${PROJECT_SOURCE_DIR}/scripts/windows-context-menu.ps1"
+            "$<TARGET_FILE_DIR:vnote>/windows-context-menu.ps1"
+        DEPENDS "${PROJECT_SOURCE_DIR}/scripts/windows-context-menu.ps1"
+        VERBATIM
+    )
+    add_dependencies(vnote vnote_windows_context_menu)
+
     add_custom_command(TARGET vnote POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
         "${PROJECT_SOURCE_DIR}/package/qt.conf" $<TARGET_FILE_DIR:vnote>)
@@ -233,6 +245,8 @@ endif()
 if (WIN32)
     install(TARGETS vnote RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
     install(FILES "${PROJECT_SOURCE_DIR}/package/qt.conf" DESTINATION ${CMAKE_INSTALL_BINDIR})
+    install(FILES "${PROJECT_SOURCE_DIR}/scripts/windows-context-menu.ps1"
+        DESTINATION ${CMAKE_INSTALL_BINDIR})
     install(FILES ${VX_EXTRA_RESOURCE_FILES_RCC} DESTINATION ${CMAKE_INSTALL_BINDIR})
     install(FILES "${VX_SODIUM_SOURCE_DIR}/libsodium/LICENSE"
         DESTINATION ${CMAKE_INSTALL_BINDIR} RENAME LICENSE.libsodium)

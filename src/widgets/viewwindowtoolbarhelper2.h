@@ -59,9 +59,8 @@ public:
     // In-place preview toggle (Edit mode only).
     InplacePreview,
 
-    // Persisted Markdown concealment preferences (Edit mode only).
-    ConcealDestinations,
-    ConcealMarkdownMarkers,
+    // Persisted Markdown concealment preset (Edit mode only).
+    Concealment,
 
     // Per-window permission for automatic section numbering in every mode.
     AllowAutoSectionNumber,
@@ -95,6 +94,11 @@ public:
   // @p_shortcutWidget: Widget for shortcut context (the ViewWindow2 instance).
   static QAction *addAction(QToolBar *p_tb, Action p_action, ServiceLocator &p_services,
                             QWidget *p_shortcutWidget);
+
+  // Shared Markdown formatting actions, including configured shortcuts.
+  // Requires ConfigMgr2 and ThemeService, but no ViewWindow or notebook services.
+  static QAction *addFormattingAction(QToolBar *p_tb, Action p_action, ServiceLocator &p_services,
+                                      QWidget *p_shortcutWidget);
 
   // Create a menu action via DI, with the same shortcut context as toolbar actions.
   static QAction *addAction(QMenu *p_menu, Action p_action, ServiceLocator &p_services,

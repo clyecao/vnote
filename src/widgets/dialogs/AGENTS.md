@@ -44,6 +44,19 @@ Tests find dialog widgets via `findChild<>("objectName")` — NOT by label text.
 Settings pages use `settings/SettingsPageHelper` for card rows. This is a desktop form
 convention, not a rule that every input must occupy the same row as its label.
 
+View-window options remain in their menus/toolbars. Searchable, read-only cards at the top of
+**Markdown Editor** explain preview/concealment toggles; **Editor** covers PDF viewing modes
+and Typst preview/color options; **Mind Map Editor** explains **Layout** and **Readable Width**.
+Use the shared title **Editor Toolbar Options** and description **Options in the toolbar of the
+editor**. Each option explains its behavior without repeating its toolbar/menu location. Write
+each description as one sentence without a trailing period, putting supplementary details in
+parentheses. Do not duplicate these controls in Settings or mark a page changed when
+showing/searching the hints.
+Use control-free `createSettingRow()` rows and
+register their title labels as search targets: the row/description styles suppress hit borders.
+Reuse the menu's translation context for existing action titles where available; new explanatory
+copy belongs to the settings page.
+
 - **Compact is the default:** ordinary combo boxes, spin boxes and short line edits keep
   their label and input on one row when space permits. Use `createSettingRow()`; never
   choose orientation by recursively searching for a `QLineEdit` (spin boxes contain one).
@@ -100,6 +113,21 @@ long fields, label-to-input focus, and no avoidable horizontal scrolling. Exerci
 Reset and search; for dynamic groups also verify add/remove and saved-value reloads, not
 just widget counts. Widths below a control's intrinsic usable minimum may require scrolling;
 do not clip labels or values to hide that limit.
+
+## Windows system context menu
+
+Settings → File Associations exposes the **System Context Menu** card only on Windows.
+Keep it compact: section title, action buttons and operation feedback, without a static description.
+**Add to Context Menu** and **Remove from Context Menu** call the application-owned
+`WindowsContextMenuController`, disable while busy, and show its retained success/error result.
+They apply immediately for the current Windows user, independently of Apply/Reset; opening or
+resetting Settings never mutates the registry. Read in VNote requests Read in a detached window;
+Edit in VNote requests Edit in the main window. Windows 11 may list them under **Show more options**.
+Only applied **Built-In File Types** suffixes are registered (including Image, excluding Others
+and external-program mappings). Apply suffix edits first, then click Add again to reconcile the
+registered types and remove old all-files entries. Unsaved edits are ignored; an empty supported
+suffix list clears registration. Remove works even after the suffix configuration or install path
+changes. The script does not change default file associations or require administrator access.
 
 ## Banner Suppression Pattern (Quiet Dialog UX)
 
@@ -195,12 +223,16 @@ the session cache. The quick-note path is unrelated: its template name is persis
 Settings → Quick Access → Quick Note persists **Open in detached window** per scheme
 as `quickNoteSchemes[].detachedView` in `session.json`. Missing means `false`, preserving
 older schemes. Include this flag in scheme equality: a toggle-only edit must persist.
-Tray, toolbar, keyboard and tab-bar requests share the picker and honor the selected
-scheme; they do not override its destination. Quick notes still open in Edit mode.
+Tray, toolbar, keyboard and tab-bar requests use the only scheme directly when exactly
+one exists, and show the picker when multiple exist. They honor the chosen scheme without
+overriding its destination. Quick notes still open in Edit mode.
 
 Fresh `SessionConfig` instances start with **Quick Note in Current Notebook**, using the
 notebook-relative folder `Quick Notes` and filename `quick_note_%da%.md`, with no template.
-This is a constructor default only: loading saved schemes replaces it, without migration.
+On a version change from below `4.14.2`, an empty saved list receives this default once;
+nonempty custom schemes and empty lists stamped `4.14.2` or newer remain unchanged.
+Same-version launches do not migrate. See the
+[configuration migration contract](../../core/AGENTS.md#configuration-migration-contract).
 
 Manually added schemes use `ConfigMgr2::getDefaultNotebookPath()`, shared with `FirstRunController`:
 `vnote_notebook` under Qt's writable Documents location, without an explicit home-folder fallback.

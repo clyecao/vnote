@@ -21,6 +21,7 @@ target_sources(vnote PRIVATE
     snippetcontroller.cpp snippetcontroller.h
     taskcontroller.cpp taskcontroller.h
     textviewwindowcontroller.cpp textviewwindowcontroller.h
+    todoviewwindowcontroller.cpp todoviewwindowcontroller.h
     typstviewwindowcontroller.cpp typstviewwindowcontroller.h
     commentcontroller.cpp commentcontroller.h
     pdfviewwindowcontroller.cpp pdfviewwindowcontroller.h
@@ -30,6 +31,7 @@ target_sources(vnote PRIVATE
     markdownrendercontroller.cpp markdownrendercontroller.h
     markdownviewwindowcontroller.cpp markdownviewwindowcontroller.h
     outlinecontroller.cpp outlinecontroller.h
+    outlinesectioneditor.cpp outlinesectioneditor.h
     attachmentcontroller.cpp attachmentcontroller.h
     exportcontroller.cpp exportcontroller.h
     foldersharecontroller.cpp foldersharecontroller.h
@@ -40,6 +42,12 @@ target_sources(vnote PRIVATE
     notificationrouter.cpp notificationrouter.h
     updatecontroller.cpp updatecontroller.h
 )
+
+if(WIN32)
+    target_sources(vnote PRIVATE
+        windowscontextmenucontroller.cpp windowscontextmenucontroller.h
+    )
+endif()
 
 target_include_directories(vnote PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}
